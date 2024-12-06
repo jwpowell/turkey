@@ -12,7 +12,9 @@ pub enum Token {
     Comma,
 
     String(String),
-    Atom(String),
+    Identifier(String),
+    Integer(String),
+    Float(String),
 }
 
 #[derive(Debug)]
@@ -32,8 +34,11 @@ enum LexerMode {
     String,
     StringEscape,
     Comment,
-    Atom,
-
+    Identifier,
+    Integer,
+    Float,
+    FloatExpStart,
+    FloatExp,
     EndOfStream,
 }
 
@@ -172,7 +177,12 @@ impl Lexer {
             LexerMode::String => self.lex_string(input),
             LexerMode::StringEscape => self.lex_string_escape(input),
             LexerMode::Comment => self.lex_comment(input),
-            LexerMode::Atom => self.lex_atom(input),
+            LexerMode::Identifier => self.lex_identifier(input),
+            LexerMode::Integer => self.lex_integer(input),
+            LexerMode::Float => self.lex_float(input),
+            LexerMode::FloatExpStart => self.lex_float_exp_start(input),
+            LexerMode::FloatExp => self.lex_float_exp(input),
+
             LexerMode::EndOfStream => {
                 panic!("Lexer should not be called after end of stream");
             }
@@ -214,9 +224,14 @@ impl Lexer {
                 self.change_modes(LexerMode::EndOfStream);
             }
 
+            Some('-') | Some('0'..='9') => {
+                self.save_and_advance(input.unwrap());
+                self.change_modes(LexerMode::Integer);
+            }
+
             Some(c) => {
                 self.save_and_advance(c);
-                self.change_modes(LexerMode::Atom);
+                self.change_modes(LexerMode::Identifier);
             }
         }
     }
@@ -262,12 +277,12 @@ impl Lexer {
         }
     }
 
-    fn lex_atom(&mut self, input_opt: Option<char>) {
+    fn lex_identifier(&mut self, input_opt: Option<char>) {
         match input_opt {
             Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
             | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
             | Some('\n') => {
-                self.emit(Token::Atom(self.buffer.clone()), false);
+                self.emit(Token::Identifier(self.buffer.clone()), false);
 
                 self.change_modes(LexerMode::Normal);
                 self.lex(input_opt);
@@ -278,7 +293,7 @@ impl Lexer {
             }
 
             None => {
-                self.emit(Token::Atom(self.buffer.clone()), true);
+                self.emit(Token::Identifier(self.buffer.clone()), true);
             }
         }
     }
@@ -296,6 +311,103 @@ impl Lexer {
 
             None => {
                 self.error = Some("Unterminated string escape".to_string());
+            }
+        }
+    }
+
+    fn lex_integer(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some(c @ '0'..='9') => {
+                self.save_and_advance(c);
+            }
+
+            Some('.') => {
+                self.save_and_advance('.');
+                self.change_modes(LexerMode::Float);
+            }
+
+            Some('e') | Some('E') => {
+                self.save_and_advance('e');
+                self.change_modes(LexerMode::FloatExp);
+            }
+
+            Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
+            | Some('\n') | None => {
+                self.emit(Token::Identifier(self.buffer.clone()), false);
+
+                self.change_modes(LexerMode::Normal);
+                self.lex(input_opt);
+            }
+
+            _ => {
+                self.error = Some("Invalid integer".to_string());
+            }
+        }
+    }
+
+    fn lex_float(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some(c @ '0'..='9') => {
+                self.save_and_advance(c);
+            }
+
+            Some('e') | Some('E') => {
+                self.save_and_advance('e');
+                self.change_modes(LexerMode::FloatExp);
+            }
+
+            Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
+            | Some('\n') | None => {
+                self.emit(Token::Float(self.buffer.clone()), false);
+
+                self.change_modes(LexerMode::Normal);
+                self.lex(input_opt);
+            }
+
+            _ => {
+                self.error = Some("Invalid float".to_string());
+            }
+        }
+    }
+
+    fn lex_float_exp_start(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some(c @ '0'..='9') | Some(c @ '+') | Some(c @ '-') => {
+                self.save_and_advance(c);
+                self.change_modes(LexerMode::FloatExp);
+            }
+
+            Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
+            | Some('\n') | None => {
+                self.error = Some("Invalid float exponent start".to_string());
+            }
+
+            _ => {
+                self.error = Some("Invalid float exponent".to_string());
+            }
+        }
+    }
+
+    fn lex_float_exp(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some(c @ '0'..='9') => {
+                self.save_and_advance(c);
+            }
+
+            Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
+            | Some('\n') | None => {
+                self.emit(Token::Float(self.buffer.clone()), false);
+
+                self.change_modes(LexerMode::Normal);
+                self.lex(input_opt);
+            }
+
+            _ => {
+                self.error = Some("Invalid float exponent".to_string());
             }
         }
     }
@@ -381,7 +493,7 @@ mod tests {
     fn test_atom() {
         let lexemes = lex_input("atom");
         assert_eq!(lexemes.len(), 1);
-        assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert!(matches!(lexemes[0].token, Token::Identifier(ref s) if s == "atom"));
         assert_eq!(lexemes[0].position, 0);
     }
 
@@ -391,7 +503,7 @@ mod tests {
         assert_eq!(lexemes.len(), 7);
         assert!(matches!(lexemes[0].token, Token::LParen));
         assert_eq!(lexemes[0].position, 0);
-        assert!(matches!(lexemes[1].token, Token::Atom(ref s) if s == "atom"));
+        assert!(matches!(lexemes[1].token, Token::Identifier(ref s) if s == "atom"));
         assert_eq!(lexemes[1].position, 1);
         assert!(matches!(lexemes[2].token, Token::String(ref s) if s == "string"));
         assert_eq!(lexemes[2].position, 6);
@@ -409,7 +521,7 @@ mod tests {
     fn test_comment() {
         let lexemes = lex_input("; this is a comment\natom");
         assert_eq!(lexemes.len(), 1);
-        assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert!(matches!(lexemes[0].token, Token::Identifier(ref s) if s == "atom"));
         assert_eq!(lexemes[0].position, 20);
     }
 
@@ -464,7 +576,7 @@ mod tests {
     fn test_unterminated_atom() {
         let lexemes = lex_input("atom(");
         assert_eq!(lexemes.len(), 2);
-        assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert!(matches!(lexemes[0].token, Token::Identifier(ref s) if s == "atom"));
         assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::LParen));
         assert_eq!(lexemes[1].position, 4);
@@ -539,7 +651,7 @@ mod tests {
         assert!(!lexemes.is_empty());
 
         for lexeme in lexemes {
-            if let Token::Atom(ref s) = lexeme.token {
+            if let Token::Identifier(ref s) = lexeme.token {
                 assert!(!s.contains(' '), "Atom token contains whitespace: {}", s);
             }
         }
