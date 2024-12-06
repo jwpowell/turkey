@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum Token {
     LParen,
     RParen,
@@ -14,6 +15,7 @@ pub enum Token {
     Atom(String),
 }
 
+#[derive(Debug)]
 pub struct Lexeme {
     pub token: Token,
 
@@ -27,12 +29,34 @@ enum LexerMode {
     StringEscape,
     Comment,
     Atom,
+
+    EndOfStream,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Location {
+    position: usize,
+    column: usize,
+    line: usize,
+}
+
+impl Location {
+    fn beginning() -> Location {
+        Location {
+            position: 0,
+            column: 1,
+            line: 1,
+        }
+    }
 }
 
 pub struct Lexer {
     mode: LexerMode,
     buffer: String,
-    position: usize,
+
+    current: Location,
+    start: Location,
+
     output: Vec<Lexeme>,
     error: Option<String>,
 }
@@ -42,38 +66,21 @@ impl Lexer {
         Lexer {
             mode: LexerMode::Normal,
             buffer: String::new(),
-            position: 0,
+
+            current: Location::beginning(),
+            start: Location::beginning(),
+
             output: Vec::new(),
             error: None,
         }
     }
 
     pub fn update(&mut self, input: char) {
-        self.lex(input);
+        self.lex(Some(input));
     }
 
     pub fn finish(&mut self) {
-        if self.error.is_some() {
-            return;
-        }
-
-        match self.mode {
-            LexerMode::Normal => {}
-
-            LexerMode::String => {
-                self.error = Some("Unterminated string".to_string());
-            }
-
-            LexerMode::StringEscape => {
-                self.error = Some("Unterminated string escape".to_string());
-            }
-
-            LexerMode::Comment => {}
-
-            LexerMode::Atom => {
-                self.push_token(Token::Atom(self.buffer.clone()));
-            }
-        }
+        self.lex(None);
     }
 
     pub fn take(&mut self, lexemes: &mut Vec<Lexeme>) {
@@ -88,23 +95,52 @@ impl Lexer {
         self.error.as_deref()
     }
 
-    fn push_token(&mut self, token: Token) {
-        self.output.push(Lexeme {
+    fn emit(&mut self, token: Token, should_advance: bool) {
+        let length = self.buffer.len();
+        let lexeme = Lexeme {
             token,
-            position: self.position,
-            length: self.buffer.len(),
-        });
+            position: self.start.position,
+            length,
+        };
+        self.output.push(lexeme);
 
-        self.position += self.buffer.len();
+        if should_advance {
+            self.advance();
+        }
+
+        self.commit();
+    }
+
+    fn skip(&mut self) {
+        self.advance();
+        self.commit();
+    }
+
+    fn save_and_advance(&mut self, input: char) {
+        self.buffer.push(input);
+        self.advance();
+    }
+
+    fn advance(&mut self) {
+        self.current.position += 1;
+        self.current.column += 1;
+    }
+
+    fn commit(&mut self) {
+        self.start = self.current;
         self.buffer.clear();
-        self.mode = LexerMode::Normal;
     }
 
     fn newline(&mut self) {
-        //
+        self.current.line += 1;
+        self.current.column = 1;
     }
 
-    fn lex(&mut self, input: char) {
+    fn change_modes(&mut self, mode: LexerMode) {
+        self.mode = mode;
+    }
+
+    fn lex(&mut self, input: Option<char>) {
         if self.error.is_some() {
             return;
         }
@@ -115,98 +151,126 @@ impl Lexer {
             LexerMode::StringEscape => self.lex_string_escape(input),
             LexerMode::Comment => self.lex_comment(input),
             LexerMode::Atom => self.lex_atom(input),
-        }
-    }
-
-    fn lex_normal(&mut self, input: char) {
-        match input {
-            '(' => self.push_token(Token::LParen),
-            ')' => self.push_token(Token::RParen),
-            '[' => self.push_token(Token::LBracket),
-            ']' => self.push_token(Token::RBracket),
-            '{' => self.push_token(Token::LBrace),
-            '}' => self.push_token(Token::RBrace),
-
-            '\'' => self.push_token(Token::Quote),
-            '`' => self.push_token(Token::Backquote),
-            ',' => self.push_token(Token::Comma),
-
-            '"' => {
-                self.mode = LexerMode::String;
-                self.buffer.clear();
-            }
-
-            ';' => self.mode = LexerMode::Comment,
-
-            ' ' | '\t' => {}
-
-            '\n' => self.newline(),
-
-            _ => {
-                self.mode = LexerMode::Atom;
-                self.buffer.clear();
-                self.buffer.push(input);
+            LexerMode::EndOfStream => {
+                panic!("Lexer should not be called after end of stream");
             }
         }
     }
 
-    fn lex_string(&mut self, input: char) {
+    fn lex_normal(&mut self, input: Option<char>) {
         match input {
-            '"' => {
-                self.push_token(Token::String(self.buffer.clone()));
+            Some('(') => self.emit(Token::LParen, true),
+            Some(')') => self.emit(Token::RParen, true),
+            Some('[') => self.emit(Token::LBracket, true),
+            Some(']') => self.emit(Token::RBracket, true),
+            Some('{') => self.emit(Token::LBrace, true),
+            Some('}') => self.emit(Token::RBrace, true),
+
+            Some('\'') => self.emit(Token::Quote, true),
+            Some('`') => self.emit(Token::Backquote, true),
+            Some(',') => self.emit(Token::Comma, true),
+
+            Some('"') => {
+                self.advance();
+                self.change_modes(LexerMode::String);
             }
 
-            '\\' => {
-                self.mode = LexerMode::StringEscape;
-                self.buffer.push(input);
+            Some(';') => {
+                self.skip();
+                self.change_modes(LexerMode::Comment);
             }
 
-            '\n' => {
-                self.newline();
-                self.buffer.push(input);
-            }
+            Some(' ') | Some('\t') => self.skip(),
 
-            _ => {
-                self.buffer.push(input);
-            }
-        }
-    }
-
-    fn lex_comment(&mut self, input: char) {
-        match input {
-            '\n' => {
-                self.mode = LexerMode::Normal;
+            Some('\n') => {
+                self.skip();
                 self.newline();
             }
 
-            _ => {}
+            None => {
+                self.change_modes(LexerMode::EndOfStream);
+            }
+
+            Some(c) => {
+                self.save_and_advance(c);
+                self.change_modes(LexerMode::Atom);
+            }
         }
     }
 
-    fn lex_atom(&mut self, input: char) {
+    fn lex_string(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some('"') => {
+                self.emit(Token::String(self.buffer.clone()), true);
+                self.change_modes(LexerMode::Normal);
+            }
+
+            Some(c @ '\\') => {
+                self.save_and_advance(c);
+                self.change_modes(LexerMode::StringEscape);
+            }
+
+            Some('\n') => {
+                self.save_and_advance('\n');
+                self.newline();
+            }
+
+            Some(c) => {
+                self.save_and_advance(c);
+            }
+
+            None => {
+                self.error = Some("Unterminated string".to_string());
+            }
+        }
+    }
+
+    fn lex_comment(&mut self, input: Option<char>) {
         match input {
-            '(' | ')' | '[' | ']' | '{' | '}' | '\'' | '`' | ',' | '"' | ';' | ' ' | '\t'
-            | '\n' => {
-                self.push_token(Token::Atom(self.buffer.clone()));
-                self.mode = LexerMode::Normal;
-                self.lex(input);
+            Some('\n') => {
+                self.skip();
+                self.newline();
+                self.change_modes(LexerMode::Normal);
             }
 
             _ => {
-                self.buffer.push(input);
+                self.skip();
             }
         }
     }
 
-    fn lex_string_escape(&mut self, input: char) {
-        match input {
-            '"' => {
-                self.buffer.push(input);
+    fn lex_atom(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t') => {
+                self.emit(Token::Atom(self.buffer.clone()), false);
+                self.change_modes(LexerMode::Normal);
+                self.lex(input_opt);
+            }
+
+            Some(c) => {
+                self.save_and_advance(c);
+            }
+
+            None => {
+                self.emit(Token::Atom(self.buffer.clone()), true);
+            }
+        }
+    }
+
+    fn lex_string_escape(&mut self, input_opt: Option<char>) {
+        match input_opt {
+            Some('"') => {
+                self.buffer.push('"');
                 self.mode = LexerMode::String;
             }
 
-            _ => {
+            Some(_) => {
                 self.error = Some("Invalid string escape".to_string());
+            }
+
+            None => {
+                self.error = Some("Unterminated string escape".to_string());
             }
         }
     }
@@ -237,7 +301,9 @@ mod tests {
         let lexemes = lex_input("()");
         assert_eq!(lexemes.len(), 2);
         assert!(matches!(lexemes[0].token, Token::LParen));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::RParen));
+        assert_eq!(lexemes[1].position, 1);
     }
 
     #[test]
@@ -245,7 +311,9 @@ mod tests {
         let lexemes = lex_input("[]");
         assert_eq!(lexemes.len(), 2);
         assert!(matches!(lexemes[0].token, Token::LBracket));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::RBracket));
+        assert_eq!(lexemes[1].position, 1);
     }
 
     #[test]
@@ -253,7 +321,9 @@ mod tests {
         let lexemes = lex_input("{}");
         assert_eq!(lexemes.len(), 2);
         assert!(matches!(lexemes[0].token, Token::LBrace));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::RBrace));
+        assert_eq!(lexemes[1].position, 1);
     }
 
     #[test]
@@ -261,7 +331,9 @@ mod tests {
         let lexemes = lex_input("'`");
         assert_eq!(lexemes.len(), 2);
         assert!(matches!(lexemes[0].token, Token::Quote));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::Backquote));
+        assert_eq!(lexemes[1].position, 1);
     }
 
     #[test]
@@ -269,6 +341,7 @@ mod tests {
         let lexemes = lex_input(",");
         assert_eq!(lexemes.len(), 1);
         assert!(matches!(lexemes[0].token, Token::Comma));
+        assert_eq!(lexemes[0].position, 0);
     }
 
     #[test]
@@ -276,6 +349,7 @@ mod tests {
         let lexemes = lex_input("\"hello\"");
         assert_eq!(lexemes.len(), 1);
         assert!(matches!(lexemes[0].token, Token::String(ref s) if s == "hello"));
+        assert_eq!(lexemes[0].position, 0);
     }
 
     #[test]
@@ -283,6 +357,7 @@ mod tests {
         let lexemes = lex_input("atom");
         assert_eq!(lexemes.len(), 1);
         assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert_eq!(lexemes[0].position, 0);
     }
 
     #[test]
@@ -290,12 +365,19 @@ mod tests {
         let lexemes = lex_input("(atom \"string\" ' ` ,)");
         assert_eq!(lexemes.len(), 7);
         assert!(matches!(lexemes[0].token, Token::LParen));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::Atom(ref s) if s == "atom"));
+        assert_eq!(lexemes[1].position, 1);
         assert!(matches!(lexemes[2].token, Token::String(ref s) if s == "string"));
+        assert_eq!(lexemes[2].position, 6);
         assert!(matches!(lexemes[3].token, Token::Quote));
+        assert_eq!(lexemes[3].position, 15);
         assert!(matches!(lexemes[4].token, Token::Backquote));
+        assert_eq!(lexemes[4].position, 17);
         assert!(matches!(lexemes[5].token, Token::Comma));
+        assert_eq!(lexemes[5].position, 19);
         assert!(matches!(lexemes[6].token, Token::RParen));
+        assert_eq!(lexemes[6].position, 20);
     }
 
     #[test]
@@ -303,6 +385,7 @@ mod tests {
         let lexemes = lex_input("; this is a comment\natom");
         assert_eq!(lexemes.len(), 1);
         assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert_eq!(lexemes[0].position, 20);
     }
 
     #[test]
@@ -310,6 +393,7 @@ mod tests {
         let lexemes = lex_input("\"hello \\\"world\\\"\"");
         assert_eq!(lexemes.len(), 1);
         assert!(matches!(lexemes[0].token, Token::String(ref s) if s == "hello \\\"world\\\""));
+        assert_eq!(lexemes[0].position, 0);
     }
 
     #[test]
@@ -356,7 +440,9 @@ mod tests {
         let lexemes = lex_input("atom(");
         assert_eq!(lexemes.len(), 2);
         assert!(matches!(lexemes[0].token, Token::Atom(ref s) if s == "atom"));
+        assert_eq!(lexemes[0].position, 0);
         assert!(matches!(lexemes[1].token, Token::LParen));
+        assert_eq!(lexemes[1].position, 4);
     }
 
     #[test]
@@ -372,14 +458,38 @@ mod tests {
     }
 
     #[test]
-    fn test_lexeme_positions() {
-        let input = "(atom \"string\" ' ` ,)";
+    fn test_lexeme_positions_01() {
+        let input = "0 23 5678";
         let lexemes = lex_input(input);
-        assert_eq!(lexemes.len(), 7);
+        assert_eq!(lexemes.len(), 3);
 
-        let expected_positions = vec![0, 1, 6, 14, 16, 18, 19];
+        let expected_positions = vec![0, 2, 5];
         for (lexeme, &expected_position) in lexemes.iter().zip(expected_positions.iter()) {
-            assert_eq!(lexeme.position, expected_position);
+            assert_eq!(lexeme.position, expected_position, "Lexeme: {:?}", lexeme);
+        }
+    }
+
+    #[test]
+    fn test_lexeme_positions_02() {
+        let input = "((((((";
+        let lexemes = lex_input(input);
+        assert_eq!(lexemes.len(), 6);
+
+        let expected_positions = vec![0, 1, 2, 3, 4, 5];
+        for (lexeme, &expected_position) in lexemes.iter().zip(expected_positions.iter()) {
+            assert_eq!(lexeme.position, expected_position, "Lexeme: {:?}", lexeme);
+        }
+    }
+
+    #[test]
+    fn test_lexeme_positions_03() {
+        let input = "(atom)";
+        let lexemes = lex_input(input);
+        assert_eq!(lexemes.len(), 3);
+
+        let expected_positions = vec![0, 1, 5];
+        for (lexeme, &expected_position) in lexemes.iter().zip(expected_positions.iter()) {
+            assert_eq!(lexeme.position, expected_position, "Lexeme: {:?}", lexeme);
         }
     }
 
