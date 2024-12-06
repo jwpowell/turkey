@@ -21,8 +21,12 @@ pub struct Lexeme {
 
     pub position: usize,
     pub length: usize,
+
+    pub line: usize,
+    pub column: usize,
 }
 
+#[derive(Debug)]
 enum LexerMode {
     Normal,
     String,
@@ -96,11 +100,14 @@ impl Lexer {
     }
 
     fn emit(&mut self, token: Token, should_advance: bool) {
+        print!("  emit({:?}, {})\n    ", token, should_advance);
         let length = self.buffer.len();
         let lexeme = Lexeme {
             token,
             position: self.start.position,
             length,
+            line: self.start.line,
+            column: self.start.column,
         };
         self.output.push(lexeme);
 
@@ -112,26 +119,35 @@ impl Lexer {
     }
 
     fn skip(&mut self) {
+        print!("  skip()\n    ");
         self.advance();
+
+        print!("    ");
         self.commit();
     }
 
     fn save_and_advance(&mut self, input: char) {
+        print!("  save_and_advance({:?})\n    ", input);
         self.buffer.push(input);
         self.advance();
     }
 
     fn advance(&mut self) {
+        println!("  advance()");
         self.current.position += 1;
         self.current.column += 1;
     }
 
     fn commit(&mut self) {
+        println!("  commit()");
+
         self.start = self.current;
         self.buffer.clear();
     }
 
     fn newline(&mut self) {
+        println!("  newline()");
+
         self.current.line += 1;
         self.current.column = 1;
     }
@@ -141,6 +157,12 @@ impl Lexer {
     }
 
     fn lex(&mut self, input: Option<char>) {
+        println!("lex({:?})", input);
+        println!("  mode: {:?}", self.mode);
+        println!("  buffer: {:?}", self.buffer);
+        println!("  current: {:?}", self.current);
+        println!("  start: {:?}", self.start);
+
         if self.error.is_some() {
             return;
         }
@@ -185,6 +207,7 @@ impl Lexer {
             Some('\n') => {
                 self.skip();
                 self.newline();
+                self.commit();
             }
 
             None => {
@@ -242,8 +265,10 @@ impl Lexer {
     fn lex_atom(&mut self, input_opt: Option<char>) {
         match input_opt {
             Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
-            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t') => {
+            | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
+            | Some('\n') => {
                 self.emit(Token::Atom(self.buffer.clone()), false);
+
                 self.change_modes(LexerMode::Normal);
                 self.lex(input_opt);
             }
@@ -518,5 +543,41 @@ mod tests {
                 assert!(!s.contains(' '), "Atom token contains whitespace: {}", s);
             }
         }
+    }
+
+    #[test]
+    fn test_lexeme_line_and_column_01() {
+        let input = "atom\nsecond";
+        let lexemes = lex_input(input);
+        assert_eq!(lexemes.len(), 2, "Lexemes: {:?}", lexemes);
+
+        assert_eq!(lexemes[0].line, 1);
+        assert_eq!(lexemes[0].column, 1);
+        assert_eq!(lexemes[1].line, 2, "Lexemes: {:#?}", lexemes);
+        assert_eq!(lexemes[1].column, 1, "Lexeme: {:?}", lexemes[1]);
+    }
+
+    #[test]
+    fn test_lexeme_line_and_column_02() {
+        let input = "(print \"Hello, World!\")\n\n(print \"Another line\")";
+        let lexemes = lex_input(input);
+        assert_eq!(lexemes.len(), 8);
+
+        assert_eq!(lexemes[0].line, 1); // (
+        assert_eq!(lexemes[0].column, 1);
+        assert_eq!(lexemes[1].line, 1); // print
+        assert_eq!(lexemes[1].column, 2);
+        assert_eq!(lexemes[2].line, 1); // Hello, World!
+        assert_eq!(lexemes[2].column, 8);
+        assert_eq!(lexemes[3].line, 1); // )
+        assert_eq!(lexemes[3].column, 23);
+        assert_eq!(lexemes[4].line, 3); // (
+        assert_eq!(lexemes[4].column, 1);
+        assert_eq!(lexemes[5].line, 3); // print
+        assert_eq!(lexemes[5].column, 2);
+        assert_eq!(lexemes[6].line, 3); // Another line
+        assert_eq!(lexemes[6].column, 8);
+        assert_eq!(lexemes[7].line, 3); // )
+        assert_eq!(lexemes[7].column, 22);
     }
 }
