@@ -372,6 +372,18 @@ mod tests {
     }
 
     #[test]
+    fn test_lexeme_positions() {
+        let input = "(atom \"string\" ' ` ,)";
+        let lexemes = lex_input(input);
+        assert_eq!(lexemes.len(), 7);
+
+        let expected_positions = vec![0, 1, 6, 14, 16, 18, 19];
+        for (lexeme, &expected_position) in lexemes.iter().zip(expected_positions.iter()) {
+            assert_eq!(lexeme.position, expected_position);
+        }
+    }
+
+    #[test]
     fn test_large_input() {
         let input = r#"
         (define (factorial n)
