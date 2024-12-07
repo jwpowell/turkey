@@ -328,13 +328,13 @@ impl Lexer {
 
             Some('e') | Some('E') => {
                 self.save_and_advance('e');
-                self.change_modes(LexerMode::FloatExp);
+                self.change_modes(LexerMode::FloatExpStart);
             }
 
             Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
             | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
             | Some('\n') | None => {
-                self.emit(Token::Identifier(self.buffer.clone()), false);
+                self.emit(Token::Integer(self.buffer.clone()), false);
 
                 self.change_modes(LexerMode::Normal);
                 self.lex(input_opt);
@@ -354,7 +354,7 @@ impl Lexer {
 
             Some('e') | Some('E') => {
                 self.save_and_advance('e');
-                self.change_modes(LexerMode::FloatExp);
+                self.change_modes(LexerMode::FloatExpStart);
             }
 
             Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
@@ -399,11 +399,15 @@ impl Lexer {
 
             Some('(') | Some(')') | Some('[') | Some(']') | Some('{') | Some('}') | Some('\'')
             | Some('`') | Some(',') | Some('"') | Some(';') | Some(' ') | Some('\t')
-            | Some('\n') | None => {
+            | Some('\n') => {
                 self.emit(Token::Float(self.buffer.clone()), false);
 
                 self.change_modes(LexerMode::Normal);
                 self.lex(input_opt);
+            }
+
+            None => {
+                self.emit(Token::Float(self.buffer.clone()), true);
             }
 
             _ => {
@@ -691,5 +695,77 @@ mod tests {
         assert_eq!(lexemes[6].column, 8);
         assert_eq!(lexemes[7].line, 3); // )
         assert_eq!(lexemes[7].column, 22);
+    }
+
+    #[test]
+    fn test_integer() {
+        let lexemes = lex_input("12345");
+        assert_eq!(lexemes.len(), 1);
+        assert!(
+            matches!(lexemes[0].token, Token::Integer(ref s) if s == "12345"),
+            "{:?}",
+            lexemes[0].token
+        );
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_negative_integer() {
+        let lexemes = lex_input("-12345");
+        assert_eq!(lexemes.len(), 1);
+        assert!(matches!(lexemes[0].token, Token::Integer(ref s) if s == "-12345"));
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_float() {
+        let lexemes = lex_input("123.45");
+        assert_eq!(lexemes.len(), 1);
+        assert!(matches!(lexemes[0].token, Token::Float(ref s) if s == "123.45"));
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_negative_float() {
+        let lexemes = lex_input("-123.45");
+        assert_eq!(lexemes.len(), 1);
+        assert!(matches!(lexemes[0].token, Token::Float(ref s) if s == "-123.45"));
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_float_with_exponent() {
+        let lexemes = lex_input("1.23e10");
+        assert_eq!(lexemes.len(), 1);
+        assert!(matches!(lexemes[0].token, Token::Float(ref s) if s == "1.23e10"));
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_negative_float_with_exponent() {
+        let lexemes = lex_input("-1.23e-10");
+        assert_eq!(lexemes.len(), 1, "{:?}", lexemes);
+        assert!(matches!(lexemes[0].token, Token::Float(ref s) if s == "-1.23e-10"));
+        assert_eq!(lexemes[0].position, 0);
+    }
+
+    #[test]
+    fn test_integer_followed_by_float() {
+        let lexemes = lex_input("123 456.78");
+        assert_eq!(lexemes.len(), 2);
+        assert!(matches!(lexemes[0].token, Token::Integer(ref s) if s == "123"));
+        assert_eq!(lexemes[0].position, 0);
+        assert!(matches!(lexemes[1].token, Token::Float(ref s) if s == "456.78"));
+        assert_eq!(lexemes[1].position, 4);
+    }
+
+    #[test]
+    fn test_float_followed_by_integer() {
+        let lexemes = lex_input("123.45 678");
+        assert_eq!(lexemes.len(), 2);
+        assert!(matches!(lexemes[0].token, Token::Float(ref s) if s == "123.45"));
+        assert_eq!(lexemes[0].position, 0);
+        assert!(matches!(lexemes[1].token, Token::Integer(ref s) if s == "678"));
+        assert_eq!(lexemes[1].position, 7);
     }
 }
