@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     LParen,
     RParen,
@@ -105,7 +105,6 @@ impl Lexer {
     }
 
     fn emit(&mut self, token: Token, should_advance: bool) {
-        print!("  emit({:?}, {})\n    ", token, should_advance);
         let length = self.buffer.len();
         let lexeme = Lexeme {
             token,
@@ -124,35 +123,27 @@ impl Lexer {
     }
 
     fn skip(&mut self) {
-        print!("  skip()\n    ");
         self.advance();
 
-        print!("    ");
         self.commit();
     }
 
     fn save_and_advance(&mut self, input: char) {
-        print!("  save_and_advance({:?})\n    ", input);
         self.buffer.push(input);
         self.advance();
     }
 
     fn advance(&mut self) {
-        println!("  advance()");
         self.current.position += 1;
         self.current.column += 1;
     }
 
     fn commit(&mut self) {
-        println!("  commit()");
-
         self.start = self.current;
         self.buffer.clear();
     }
 
     fn newline(&mut self) {
-        println!("  newline()");
-
         self.current.line += 1;
         self.current.column = 1;
     }
@@ -162,12 +153,6 @@ impl Lexer {
     }
 
     fn lex(&mut self, input: Option<char>) {
-        println!("lex({:?})", input);
-        println!("  mode: {:?}", self.mode);
-        println!("  buffer: {:?}", self.buffer);
-        println!("  current: {:?}", self.current);
-        println!("  start: {:?}", self.start);
-
         if self.error.is_some() {
             return;
         }
@@ -224,7 +209,7 @@ impl Lexer {
                 self.change_modes(LexerMode::EndOfStream);
             }
 
-            Some('-') | Some('0'..='9') => {
+            Some('-') | Some('+') | Some('0'..='9') => {
                 self.save_and_advance(input.unwrap());
                 self.change_modes(LexerMode::Integer);
             }
