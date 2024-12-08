@@ -1,4 +1,5 @@
 mod matcher;
 
-pub mod lexer;
+mod lexer;
+mod regex;
 pub mod sexpr;
