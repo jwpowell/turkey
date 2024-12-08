@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::matcher::Matcher;
+use crate::regex::Regex;
 
 pub trait Token: Sized {
     type Kind: Sized + Copy;
@@ -8,31 +9,90 @@ pub trait Token: Sized {
     fn create(kind: Self::Kind, position: usize, span: &String) -> Self;
 }
 
-pub struct Lexer<T: Token> {
+pub struct Lexer<T: Token, M> {
     span: VecDeque<char>,
     cursor: usize,
 
     position: usize,
 
     pending: Option<(usize, usize)>,
-    rules: Vec<Rule<T>>,
+    rules: Vec<Rule<T, M>>,
 
     tokens: VecDeque<T>,
-    mode: u64,
+
+    start_mode: M,
+    mode: M,
+
+    active: bool,
 }
 
-struct Rule<T: Token> {
+struct Rule<T: Token, M> {
     kind: T::Kind,
     matcher: Matcher,
-    mode: u64,
-    mode_to: Option<u64>,
+    mode: M,
+    mode_to: Option<M>,
 }
 
-impl<T> Lexer<T>
+impl<T, M> Lexer<T, M>
 where
     T: Token,
+    M: Eq + Copy + Sized + Default,
 {
+    pub fn new() -> Self {
+        Lexer {
+            span: VecDeque::new(),
+            cursor: 0,
+            position: 0,
+            pending: None,
+            rules: Vec::new(),
+            tokens: VecDeque::new(),
+            start_mode: M::default(),
+            mode: M::default(),
+            active: false,
+        }
+    }
+
+    pub fn add_rule(&mut self, kind: T::Kind, regex: &Regex, mode: M, mode_to: Option<M>) {
+        if self.active {
+            self.reset();
+        }
+
+        let matcher = Matcher::from_regex(&regex.clone());
+
+        let rule = Rule {
+            kind,
+            matcher,
+            mode,
+            mode_to,
+        };
+
+        self.rules.push(rule);
+    }
+
+    pub fn set_start_mode(&mut self, mode: M) {
+        if self.active {
+            self.reset();
+        }
+
+        self.start_mode = mode;
+    }
+
+    pub fn reset(&mut self) {
+        self.span.clear();
+        self.cursor = 0;
+        self.position = 0;
+        self.pending = None;
+        self.tokens.clear();
+        self.mode = self.start_mode;
+
+        for rule in &mut self.rules {
+            rule.matcher.reset();
+        }
+    }
+
     pub fn put(&mut self, c: char) {
+        self.active = true;
+
         self.span.push_front(c);
         self.lex();
     }

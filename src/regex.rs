@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
@@ -14,7 +15,9 @@ enum RegexNode {
     Range(char, char),
     Concat(Regex, Regex),
     Union(Regex, Regex),
+    Intersect(Regex, Regex),
     Star(Regex),
+    Compl(Regex),
 }
 
 impl Regex {
@@ -76,6 +79,46 @@ impl Regex {
         }
     }
 
+    pub fn first(&self, ranges: &mut Vec<(char, char)>) {
+        match &*self.node {
+            RegexNode::Empty => {}
+            RegexNode::Epsilon => {}
+            RegexNode::Symbol(c) => {
+                ranges.push((*c, *c));
+            }
+            RegexNode::Range(from, to) => {
+                ranges.push((*from, *to));
+            }
+            RegexNode::Concat(r1, r2) => {
+                r1.first(ranges);
+                if r1.is_nullable() {
+                    r2.first(ranges);
+                }
+            }
+            RegexNode::Union(r1, r2) => {
+                r1.first(ranges);
+                r2.first(ranges);
+            }
+            RegexNode::Intersect(r1, r2) => {
+                r1.first(ranges);
+                r2.first(ranges);
+            }
+            RegexNode::Star(r) => {
+                r.first(ranges);
+            }
+            RegexNode::Compl(r) => {
+                r.first(ranges);
+            }
+        }
+    }
+
+    pub fn intersect(&self, other: &Self) -> Self {
+        Regex {
+            node: Rc::new(RegexNode::Intersect(self.clone(), other.clone())),
+            nullable: self.nullable && other.nullable,
+        }
+    }
+
     pub fn star(&self) -> Self {
         match &*self.node {
             RegexNode::Empty | RegexNode::Epsilon => Regex::epsilon(),
@@ -85,6 +128,33 @@ impl Regex {
                 nullable: true,
             },
         }
+    }
+
+    pub fn compl(&self) -> Self {
+        Regex {
+            node: Rc::new(RegexNode::Compl(self.clone())),
+            nullable: !self.nullable,
+        }
+    }
+
+    pub fn plus(&self) -> Self {
+        self.concat(&self.star())
+    }
+
+    pub fn any_of(cs: &str) -> Self {
+        let mut re = Regex::empty();
+        for c in cs.chars() {
+            re = re.union(&Regex::symbol(c));
+        }
+        re
+    }
+
+    pub fn seq(cs: &str) -> Self {
+        let mut re = Regex::epsilon();
+        for c in cs.chars() {
+            re = re.concat(&Regex::symbol(c));
+        }
+        re
     }
 
     fn v(&self) -> Self {
@@ -122,8 +192,14 @@ impl Regex {
             RegexNode::Union(r1, r2) => {
                 return r1.derivative(c).union(&r2.derivative(c));
             }
+            RegexNode::Intersect(r1, r2) => {
+                return r1.derivative(c).intersect(&r2.derivative(c));
+            }
             RegexNode::Star(r) => {
                 return r.derivative(c).concat(self);
+            }
+            RegexNode::Compl(r) => {
+                return r.derivative(c).compl();
             }
         }
     }
@@ -245,5 +321,41 @@ mod tests {
 
         let d5 = complex_re.derivative('e');
         assert!(d5.is_empty());
+    }
+
+    #[test]
+    fn test_compl() {
+        let re = Regex::symbol('a').compl();
+        assert!(!re.is_empty());
+        assert!(re.is_nullable());
+
+        let re = Regex::epsilon().compl();
+        assert!(!re.is_empty());
+        assert!(!re.is_nullable());
+
+        let re = Regex::empty().compl();
+        assert!(!re.is_empty());
+        assert!(re.is_nullable());
+    }
+
+    #[test]
+    fn test_intersect() {
+        let re1 = Regex::symbol('a');
+        let re2 = Regex::symbol('a');
+        let re = re1.intersect(&re2);
+        assert!(!re.is_empty());
+        assert!(!re.is_nullable());
+
+        let re1 = Regex::symbol('a');
+        let re2 = Regex::symbol('b');
+        let re = re1.intersect(&re2);
+        assert!(re.is_empty());
+        assert!(!re.is_nullable());
+
+        let re1 = Regex::range('a', 'z');
+        let re2 = Regex::range('m', 'p');
+        let re = re1.intersect(&re2);
+        assert!(!re.is_empty());
+        assert!(!re.is_nullable());
     }
 }
