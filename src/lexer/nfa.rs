@@ -156,15 +156,9 @@ where
                 cl2.sort_unstable();
                 cl2.dedup();
 
-                println!("i: {}, j: {}", i, j);
-                println!("cl1: {:?}", cl1);
-                println!("cl2: {:?}", cl2);
-
                 if cl1 == cl2 {
                     fixup.insert(i, j);
-                    println!("fixing up {} -> {}", i, j);
                 }
-                println!();
             }
         }
 
@@ -195,8 +189,6 @@ where
         }
         */
 
-        println!("fixup: {:?}", fixup);
-
         for i in 0..self.nodes.len() {
             if let Some(_) = fixup.get(&i) {
                 if self.nodes[i].edges.is_empty() && self.nodes[i].epsilon.is_empty() {
@@ -216,7 +208,6 @@ where
                         continue;
                     }
 
-                    println!("fixing up edge {} -> {} to {}", i, to, index);
                     *to = index;
                     changed = true;
                 }
@@ -228,7 +219,6 @@ where
                         continue;
                     }
 
-                    println!("fixing up epsilon {} -> {} to {}", i, to, index);
                     *to = index;
                     changed = true;
                 }
@@ -414,17 +404,20 @@ where
         (start, accept)
     }
 
+    #[cfg(test)]
     fn print_dot(&self) {
         println!("--------------------");
         self.write_dot(std::io::stdout()).unwrap();
         println!("--------------------");
     }
 
+    #[cfg(test)]
     fn write_dot_to_file(&self, path: &str) {
         let file = std::fs::File::create(path).unwrap();
         self.write_dot(file).unwrap();
     }
 
+    #[cfg(test)]
     fn write_dot<W: std::io::Write>(&self, mut io: W) -> std::io::Result<()> {
         writeln!(io, "digraph NFA {{")?;
         writeln!(io, "  rankdir=LR;")?;
@@ -486,9 +479,6 @@ where
     }
 
     pub fn step(&mut self, c: char) {
-        println!("step: {}", c);
-        println!("  current: {:?}", self.current);
-
         self.next.clear();
 
         for &state in &self.current {
@@ -502,8 +492,6 @@ where
 
         self.next.sort_unstable();
         self.next.dedup();
-
-        println!("  next: {:?}", self.next);
 
         std::mem::swap(&mut self.current, &mut self.next);
     }
@@ -533,8 +521,6 @@ mod tests {
         let nfa = Nfa::thompson(&regex, &());
         let mut runner = NfaRunner::new(&nfa);
 
-        nfa.print_dot();
-
         assert!(runner.is_accept());
     }
 
@@ -542,8 +528,6 @@ mod tests {
     fn test_nfa_char() {
         let regex = char('a');
         let nfa = Nfa::thompson(&regex, &());
-
-        nfa.print_dot();
 
         let mut runner = NfaRunner::new(&nfa);
 
@@ -574,12 +558,9 @@ mod tests {
         let regex = one_of("ab");
         let mut nfa = Nfa::thompson(&regex, &());
 
-        nfa.write_dot_to_file("a.dot");
         nfa.epsilon_clean();
         nfa.epsilon_clean();
         nfa.epsilon_clean();
-
-        nfa.write_dot_to_file("b.dot");
 
         let mut runner = NfaRunner::new(&nfa);
 
