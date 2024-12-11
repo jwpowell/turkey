@@ -1,10 +1,11 @@
+use std::fmt::Debug;
 use std::rc::Rc;
 
 use super::nfa::Nfa;
 
 #[derive(Clone)]
 pub struct Regex {
-    node: Rc<RegexNode>,
+    pub(crate) node: Rc<RegexNode>,
     nullable: bool,
 }
 
@@ -17,6 +18,21 @@ pub enum RegexNode {
     Intersect(Regex, Regex),
     Star(Regex),
     Not(Regex),
+}
+
+impl Debug for Regex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &*self.node {
+            RegexNode::Empty => write!(f, "∅"),
+            RegexNode::Epsilon => write!(f, "ε"),
+            RegexNode::Range(lo, hi) => write!(f, "(range {:?} {:?})", lo, hi),
+            RegexNode::Concat(a, b) => write!(f, "(concat {:?} {:?})", a, b),
+            RegexNode::Union(a, b) => write!(f, "(union {:?} {:?})", a, b),
+            RegexNode::Intersect(a, b) => write!(f, "(intersect {:?} {:?})", a, b),
+            RegexNode::Star(a) => write!(f, "(star {:?})", a),
+            RegexNode::Not(a) => write!(f, "(not {:?})", a),
+        }
+    }
 }
 
 pub fn empty() -> Regex {
