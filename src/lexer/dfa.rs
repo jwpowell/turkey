@@ -4,19 +4,6 @@
 /// guaranteed to use the same identifiers and so does not expose them.
 pub struct DfaBuilder<T>(std::marker::PhantomData<T>);
 
-/// A guard for a DFA edge.
-#[derive(Debug, Clone, Copy)]
-pub enum DfaGuard {
-    /// Matches any character.
-    Any,
-
-    /// Matches a specific character.
-    Char(char),
-
-    /// Matches a character in a range.
-    Range(char, char),
-}
-
 impl<T> DfaBuilder<T>
 where
     T: Clone,
@@ -40,7 +27,7 @@ where
     ///
     /// Panics if `from` or `to` are not valid state identifiers. Also panics if the provided
     /// guard overlaps with an existing edge.
-    pub fn add_edge(&mut self, from: u64, to: u64, guard: DfaGuard, output: T) {
+    pub fn add_edge(&mut self, from: u64, to: u64, guard: (char, char), output: T) {
         todo!()
     }
 
@@ -89,15 +76,11 @@ struct DfaState<T> {
 
     /// The edges of the DFA.
     ///
-    /// `edges` must always be sorted according to the guard using the following keys:
-    ///
-    /// - `DfaGuard::Char(c)`: `c`
-    /// - `DfaGuard::Range(a, b)`: `a`
-    /// - `DfaGuard::Any`: `'\0'`
+    /// `edges` must always be sorted according to the guard using the lower bound of the range.
     ///
     /// The `DfaGuard::Any` variant never appears in the list with other edges, therefore it need
     /// not be ordered. However, since we need a key, we can order it by the dummy value `'\0'`.
-    edges: Vec<(DfaGuard, usize, T)>,
+    edges: Vec<(char, char, usize, T)>,
 }
 
 /// A runner for a DFA.
