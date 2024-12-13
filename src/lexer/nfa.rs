@@ -1,503 +1,299 @@
-use std::collections::HashMap;
-use std::fmt::Debug;
-
-use super::regex::{Regex, RegexNode};
-use crate::lexer::regex::{char, epsilon, one_of, range};
-
-#[derive(Debug)]
-pub struct Nfa<T> {
-    start: usize,
-    accept: usize,
-    nodes: Vec<NfaNode<T>>,
+pub struct NfaBuilder<T> {
+    nfa: Nfa<T>,
 }
 
-#[derive(Debug, Clone)]
-struct NfaNode<T> {
-    edges: Vec<(char, char, usize, T)>,
-    epsilon: Vec<usize>,
+impl<T> NfaBuilder<T>
+where
+    T: Clone,
+{
+    pub fn new(cmp: fn(&T, &T) -> std::cmp::Ordering) -> Self {
+        NfaBuilder { nfa: Nfa::new(cmp) }
+    }
+
+    pub fn node(&mut self) -> usize {
+        self.nfa.node()
+    }
+
+    pub fn edge(&mut self, from: usize, to: usize, lo: char, hi: char, output: T) {
+        self.nfa.edge(from, to, lo, hi, output);
+    }
+
+    pub fn epsilon(&mut self, from: usize, to: usize) {
+        self.nfa.epsilon(from, to);
+    }
+
+    pub fn start(&mut self, state: usize) {
+        self.nfa.set_start(state);
+    }
+
+    pub fn accept(&mut self, state: usize) {
+        self.nfa.set_accept(state);
+    }
+
+    pub fn build(mut self) -> Nfa<T> {
+        self.nfa.optimize();
+
+        self.nfa
+    }
+}
+
+pub struct Nfa<T> {
+    start: Vec<usize>,
+    accept: Vec<usize>,
+    edges: Vec<Vec<(char, char, usize, T)>>,
+    epsilons: Vec<Vec<usize>>,
+    cmp: fn(&T, &T) -> std::cmp::Ordering,
 }
 
 impl<T> Nfa<T>
 where
-    T: Clone + Debug,
+    T: Clone + Ord,
 {
-    pub fn new() -> Self {
-        let mut nfa = Nfa {
-            start: 0,
-            accept: 1,
-            nodes: Vec::new(),
-        };
-
-        nfa.start = nfa.create_node();
-        nfa.accept = nfa.create_node();
-
-        nfa
-    }
-
-    fn get_start(&self) -> usize {
-        self.start
-    }
-
-    fn get_accept(&self) -> usize {
-        self.accept
-    }
-
-    fn create_node(&mut self) -> usize {
-        let index = self.nodes.len();
-
-        self.nodes.push(NfaNode {
+    fn with_natural_ordering() -> Self {
+        Nfa {
+            start: Vec::new(),
+            accept: Vec::new(),
             edges: Vec::new(),
-            epsilon: Vec::new(),
-        });
+            epsilons: Vec::new(),
+            cmp: <T as Ord>::cmp,
+        }
+    }
+}
 
-        index
+impl<T> Nfa<T>
+where
+    T: Clone,
+{
+    fn new(cmp: fn(&T, &T) -> std::cmp::Ordering) -> Self {
+        Nfa {
+            start: Vec::new(),
+            accept: Vec::new(),
+            edges: Vec::new(),
+            epsilons: Vec::new(),
+            cmp,
+        }
     }
 
-    fn add_edge(&mut self, from: usize, to: usize, lo: char, hi: char, data: T) {
-        // I'm going to do something terrible here. Forgive me.
+    fn node(&mut self) -> usize {
+        let state = self.edges.len();
+        self.ensure_node(state);
 
-        fn overlaps(lo1: char, hi1: char, lo2: char, hi2: char) -> bool {
-            (lo1 <= lo2 && lo2 <= hi1) || (lo1 <= hi2 && hi2 <= hi1)
+        state
+    }
+
+    fn ensure_node(&mut self, state: usize) {
+        if state < self.edges.len() {
+            return;
         }
 
-        let overlapping = self.nodes[from]
-            .edges
-            .iter()
-            .any(|&(lo1, hi1, _, _)| overlaps(lo1, hi1, lo, hi));
+        self.edges.resize_with(state + 1, Vec::new);
+        self.epsilons.resize_with(state + 1, Vec::new);
+    }
 
-        if overlapping {
-            let node = self.create_node();
+    fn ensure_nodes(&mut self, states: &[usize]) {
+        self.ensure_node(states.iter().max().cloned().unwrap_or(0));
+    }
 
-            self.nodes[node].edges.push((lo, hi, to, data));
-            self.add_epsilon(from, node);
+    fn edge(&mut self, from: usize, to: usize, lo: char, hi: char, output: T) {
+        if lo > hi {
+            return;
+        }
+
+        let overlaps: fn(char, char, char, char) -> bool =
+            |lo1, hi1, lo2, hi2| lo1 <= hi2 && lo2 <= hi1;
+
+        self.ensure_nodes(&[from, to]);
+
+        let mut need_epsilon = false;
+        for &(lo, hi, _, _) in self.edges[from].iter() {
+            if overlaps(lo, hi, lo, hi) {
+                need_epsilon = true;
+            }
+        }
+
+        if need_epsilon {
+            let e = self.node();
+            self.epsilon(from, e);
+            self.edges[e].push((lo, hi, to, output));
         } else {
-            self.nodes[from].edges.push((lo, hi, to, data));
+            self.edges[from].push((lo, hi, to, output));
         }
     }
 
-    fn add_epsilon(&mut self, from: usize, to: usize) {
-        self.nodes[from].epsilon.push(to);
+    fn epsilon(&mut self, from: usize, to: usize) {
+        self.ensure_nodes(&[from, to]);
+        self.epsilons[from].push(to);
+    }
 
-        self.epsilon_closure();
-
-        self.nodes[from].epsilon.sort_unstable();
-        self.nodes[from].epsilon.dedup();
+    fn set_start(&mut self, state: usize) {
+        self.start.push(state);
     }
 
     fn set_accept(&mut self, state: usize) {
-        self.add_epsilon(state, self.accept);
+        self.accept.push(state);
     }
 
-    fn epsilon_clean(&mut self) {
-        while self.epsilon_clean_inner() {
-            continue;
-        }
+    fn remove_node(&mut self, deleted: usize) {
+        let old_id = self.edges.len() - 1;
+        let new_id = deleted;
+
+        self.edges.swap(deleted, old_id);
     }
 
-    fn epsilon_clean_inner(&mut self) -> bool {
-        let mut changed = false;
+    fn optimize_deduplicate(&mut self) {
+        self.start.sort_unstable();
+        self.start.dedup();
 
-        for i in 0..self.nodes.len() {
-            self.nodes[i].epsilon.sort_unstable();
-            self.nodes[i].epsilon.dedup();
+        self.accept.sort_unstable();
+        self.accept.dedup();
+    }
 
-            let mut old = self.nodes[i].epsilon.len();
-            self.nodes[i].epsilon.retain(|&x| x != i);
+    fn optimize_epsilon_closure(&mut self) {
+        let mut visited = vec![false; self.edges.len()];
+        let mut stack = vec![];
+        let mut closure = vec![];
 
-            if old != self.nodes[i].epsilon.len() {
-                changed = true;
-            }
-        }
+        for i in 0..self.edges.len() {
+            stack.clear();
+            closure.clear();
 
-        // two states are duplicates if they dont have any edges and have the same epsilons.
-        //let mut map = HashMap::new();
-        //let mut eps = vec![];
-        let mut fixup = HashMap::new();
-
-        let mut cl1 = vec![];
-        let mut cl2 = vec![];
-
-        for i in 0..self.nodes.len() {
-            cl1.clear();
-
-            if i == self.start || i == self.accept {
-                continue;
-            }
-
-            for j in (i + 1)..self.nodes.len() {
-                cl2.clear();
-
-                if j == self.start || j == self.accept {
-                    //continue;
-                }
-
-                if i == j {
+            while let Some(s) = stack.pop() {
+                if visited[s] {
                     continue;
                 }
 
-                if !self.nodes[i].edges.is_empty() || !self.nodes[j].edges.is_empty() {
-                    continue;
-                }
+                visited[s] = true;
 
-                self.calculate_epsilon_closure(i, &mut cl1);
-                self.calculate_epsilon_closure(j, &mut cl2);
-
-                if self.nodes[i].epsilon.contains(&j) {
-                    cl2.push(j);
-                }
-
-                if self.nodes[j].epsilon.contains(&i) {
-                    cl1.push(i);
-                }
-
-                cl1.sort_unstable();
-                cl1.dedup();
-
-                cl2.sort_unstable();
-                cl2.dedup();
-
-                if cl1 == cl2 {
-                    fixup.insert(i, j);
-                }
-            }
-        }
-
-        /*
-        for i in 0..self.nodes.len() {
-            eps.clear();
-
-            if !self.nodes[i].edges.is_empty() {
-                continue;
-            }
-
-            if i == self.accept || i == self.start {
-                continue;
-            }
-
-            eps.clear();
-
-            eps.extend(self.nodes[i].epsilon.iter().copied());
-
-            eps.sort_unstable();
-            eps.dedup();
-
-            if let Some(&index) = map.get(&eps) {
-                fixup.insert(i, index);
-            } else {
-                map.insert(eps.clone(), i);
-            }
-        }
-        */
-
-        for i in 0..self.nodes.len() {
-            if let Some(_) = fixup.get(&i) {
-                if self.nodes[i].edges.is_empty() && self.nodes[i].epsilon.is_empty() {
-                    continue;
-                }
-
-                self.nodes[i].edges.clear();
-                self.nodes[i].epsilon.clear();
-
-                changed = true;
-                continue;
-            }
-
-            for (_, _, to, _) in &mut self.nodes[i].edges {
-                if let Some(&index) = fixup.get(to) {
-                    if *to == index {
-                        continue;
+                for (j, &e) in self.epsilons[i].iter().enumerate() {
+                    if i < j {
+                        // all nodes below i are closed.
+                        // only add to stack if it's not yet closed.
+                        stack.push(e);
                     }
 
-                    *to = index;
-                    changed = true;
+                    closure.push(e);
                 }
             }
 
-            for to in &mut self.nodes[i].epsilon {
-                if let Some(&index) = fixup.get(to) {
-                    if *to == index {
-                        continue;
-                    }
-
-                    *to = index;
-                    changed = true;
-                }
-            }
+            self.epsilons[i].extend(closure.drain(..));
+            self.epsilons[i].sort_unstable();
+            self.epsilons[i].dedup();
         }
+    }
 
-        for i in 0..self.nodes.len() {
-            if i == self.start || i == self.accept {
-                continue;
-            }
+    fn optimize_remove_unreachable(&mut self) {
+        let mut visited = vec![false; self.edges.len()];
+        let mut stack = self.start.clone();
+        let mut more = true;
 
-            if !self.nodes[i].edges.is_empty() || !self.nodes[i].epsilon.is_empty() {
-                continue;
-            }
+        while more {
+            more = false;
 
-            for j in 0..self.nodes.len() {
-                if j == i {
+            while let Some(s) = stack.pop() {
+                if visited[s] {
                     continue;
                 }
 
-                //self.nodes[j].edges.retain(|&(_, _, to, _)| to != i);
-                let old = self.nodes[j].epsilon.len();
-                self.nodes[j].epsilon.retain(|&to| to != i);
-                if old != self.nodes[j].epsilon.len() {
-                    changed = true;
-                }
-            }
-        }
+                visited[s] = true;
 
-        changed
-    }
-
-    fn epsilon_closure(&mut self) {
-        //self.epsilon_clean();
-
-        while self.epsilon_closure_1() {
-            continue;
-        }
-    }
-
-    fn epsilon_closure_1(&mut self) -> bool {
-        let mut changed = false;
-
-        let mut additional = vec![];
-
-        for a in 0..self.nodes.len() {
-            for &b in self.nodes[a].epsilon.iter() {
-                for &c in self.nodes[b].epsilon.iter() {
-                    if !self.nodes[a].epsilon.contains(&c) {
-                        additional.push(c);
-                        changed = true;
-                    }
-                }
-            }
-
-            self.nodes[a].epsilon.extend(additional.drain(..));
-        }
-
-        changed
-    }
-
-    fn calculate_epsilon_closure(&self, from: usize, closure: &mut Vec<usize>) {
-        closure.clear();
-
-        let mut stack = vec![from];
-        let mut visited = vec![false; self.nodes.len()];
-
-        while let Some(node) = stack.pop() {
-            visited[node] = true;
-
-            closure.extend(self.nodes[node].epsilon.iter().copied());
-            for &next in &self.nodes[node].epsilon {
-                if !visited[next] {
-                    stack.push(next);
+                for &e in &self.epsilons[s] {
+                    more = true;
+                    stack.push(e);
                 }
             }
         }
     }
 
-    fn thompson(r: &Regex, output: &T) -> Self {
-        let mut nfa: Nfa<T> = Nfa::new();
+    fn optimize_remove_dead_nodes(&mut self) {
+        for i in 0..self.edges.len() {
+            let dead = self.edges[i].is_empty()
+                && self.epsilons[i].is_empty()
+                && !self.accept.contains(&i);
 
-        match r.node.as_ref() {
-            RegexNode::Empty => {}
-
-            RegexNode::Epsilon => {
-                nfa.add_epsilon(nfa.get_start(), nfa.get_accept());
-            }
-
-            RegexNode::Range(lo, hi) => {
-                nfa.add_edge(nfa.get_start(), nfa.get_accept(), *lo, *hi, output.clone());
-            }
-
-            RegexNode::Concat(left, right) => {
-                let left = Self::thompson(left, output);
-                let right = Self::thompson(right, output);
-
-                let (ls, la) = nfa.merge(&left);
-                let (rs, ra) = nfa.merge(&right);
-
-                nfa.add_epsilon(nfa.get_start(), ls);
-                nfa.add_epsilon(la, rs);
-                nfa.add_epsilon(ra, nfa.get_accept());
-            }
-
-            RegexNode::Union(left, right) => {
-                let left = Self::thompson(left, output);
-                let right = Self::thompson(right, output);
-
-                let (ls, la) = nfa.merge(&left);
-                let (rs, ra) = nfa.merge(&right);
-
-                nfa.add_epsilon(nfa.get_start(), ls);
-                nfa.add_epsilon(nfa.get_start(), rs);
-                nfa.add_epsilon(la, nfa.get_accept());
-                nfa.add_epsilon(ra, nfa.get_accept());
-            }
-
-            RegexNode::Intersect(left, right) => {
-                let left = Self::thompson(left, output);
-                let right = Self::thompson(right, output);
-
-                let (ls, la) = nfa.merge(&left);
-                let (rs, ra) = nfa.merge(&right);
-
-                nfa.add_epsilon(nfa.get_start(), ls);
-                nfa.add_epsilon(nfa.get_start(), rs);
-                nfa.add_epsilon(la, nfa.get_accept());
-                nfa.add_epsilon(ra, nfa.get_accept());
-
-                todo!("does intersect work? hm.");
-            }
-
-            RegexNode::Star(inner) => {
-                let inner = Self::thompson(inner, output);
-
-                let (is, ia) = nfa.merge(&inner);
-
-                nfa.add_epsilon(nfa.get_start(), nfa.get_accept());
-                nfa.add_epsilon(nfa.get_accept(), nfa.get_start());
-                nfa.add_epsilon(nfa.get_start(), is);
-                nfa.add_epsilon(ia, nfa.get_accept());
-            }
-
-            RegexNode::Not(inner) => {
-                let inner = Self::thompson(inner, output);
-
-                let (is, ia) = nfa.merge(&inner);
-
-                nfa.add_epsilon(nfa.get_start(), is);
-                nfa.add_epsilon(ia, nfa.get_accept());
-
-                todo!("does 'not' work? hm.");
+            if dead {
+                self.remove_node(i);
             }
         }
-
-        nfa
     }
 
-    fn merge(&mut self, other: &Self) -> (usize, usize) {
-        let mut map = HashMap::new();
+    fn optimize_start(&mut self) {
+        let mut xs = vec![];
 
-        let start = *map.entry(other.start).or_insert_with(|| self.create_node());
-
-        let accept = *map
-            .entry(other.accept)
-            .or_insert_with(|| self.create_node());
-
-        for (from, node) in other.nodes.iter().enumerate() {
-            let from = *map.entry(from).or_insert_with(|| self.create_node());
-
-            for &(lo, hi, to, ref data) in &node.edges {
-                let to = *map.entry(to).or_insert_with(|| self.create_node());
-                self.add_edge(from, to, lo, hi, data.clone());
-            }
-
-            for &to in &node.epsilon {
-                let to = *map.entry(to).or_insert_with(|| self.create_node());
-                self.add_epsilon(from, to);
-            }
+        for &s in &self.start {
+            xs.extend(self.epsilons[s].iter().copied());
         }
 
-        (start, accept)
+        self.start.extend(xs);
+
+        self.start.sort_unstable();
+        self.start.dedup();
     }
 
-    #[cfg(test)]
-    fn print_dot(&self) {
-        println!("--------------------");
-        self.write_dot(std::io::stdout()).unwrap();
-        println!("--------------------");
-    }
-
-    #[cfg(test)]
-    fn write_dot_to_file(&self, path: &str) {
-        let file = std::fs::File::create(path).unwrap();
-        self.write_dot(file).unwrap();
-    }
-
-    #[cfg(test)]
-    fn write_dot<W: std::io::Write>(&self, mut io: W) -> std::io::Result<()> {
-        writeln!(io, "digraph NFA {{")?;
-        writeln!(io, "  rankdir=LR;")?;
-        writeln!(io, "  node [shape=circle];")?;
-
-        writeln!(io, "  _start_point [shape=point];")?;
-        writeln!(io, "  _start_point -> {};", self.get_start())?;
-
-        writeln!(io, "  {} [shape=doublecircle];", self.get_accept())?;
-
-        for (i, node) in self.nodes.iter().enumerate() {
-            for &(lo, hi, to, _) in &node.edges {
-                writeln!(io, "  {} -> {} [label=\"{}-{}\"];", i, to, lo, hi)?;
-            }
-
-            for &to in &node.epsilon {
-                writeln!(io, "  {} -> {} [label=\"ε\"];", i, to)?;
-            }
-        }
-
-        writeln!(io, "}}")?;
-
-        Ok(())
+    fn optimize(&mut self) {
+        self.optimize_deduplicate();
+        self.optimize_epsilon_closure();
+        self.optimize_remove_unreachable();
+        self.optimize_remove_dead_nodes();
+        self.optimize_start();
     }
 }
 
 pub struct NfaRunner<'a, T> {
     nfa: &'a Nfa<T>,
-    current: Vec<usize>,
-    next: Vec<usize>,
+    states: Vec<usize>,
 }
 
 impl<'a, T> NfaRunner<'a, T>
 where
-    T: Clone + Debug,
+    T: Clone,
 {
     pub fn new(nfa: &'a Nfa<T>) -> Self {
-        let mut runner = NfaRunner {
+        NfaRunner {
             nfa,
-            current: Vec::new(),
-            next: Vec::new(),
-        };
-
-        runner.reset();
-
-        runner
+            states: nfa.start.clone(),
+        }
     }
 
     pub fn reset(&mut self) {
-        self.current.clear();
-        self.current.push(self.nfa.get_start());
-
-        self.current
-            .extend(self.nfa.nodes[self.nfa.get_start()].epsilon.iter().cloned());
-        self.current.sort_unstable();
-        self.current.dedup();
-
-        self.next.clear();
+        self.states.clear();
+        self.states.extend_from_slice(&self.nfa.start);
     }
 
-    pub fn step(&mut self, c: char) {
-        self.next.clear();
+    pub fn step(&mut self, c: char) -> Option<T> {
+        let mut next = vec![];
+        let mut output = None;
 
-        for &state in &self.current {
-            for &(lo, hi, to, _) in &self.nfa.nodes[state].edges {
+        for &s in &self.states {
+            for &(lo, hi, to, ref out) in &self.nfa.edges[s] {
                 if lo <= c && c <= hi {
-                    self.next.push(to);
-                    self.next.extend(self.nfa.nodes[to].epsilon.iter().cloned());
+                    next.push(to);
+                    next.extend_from_slice(&self.nfa.epsilons[to]);
+
+                    if let Some(ref mut old_out) = output {
+                        if (self.nfa.cmp)(out, old_out) == std::cmp::Ordering::Greater {
+                            *old_out = out.clone();
+                        }
+                    } else {
+                        output = Some(out.clone());
+                    }
                 }
             }
         }
 
-        self.next.sort_unstable();
-        self.next.dedup();
+        self.states.clear();
+        self.states.extend(next);
+        self.states.sort_unstable();
+        self.states.dedup();
 
-        std::mem::swap(&mut self.current, &mut self.next);
+        output
     }
 
     pub fn is_accept(&self) -> bool {
-        self.current.binary_search(&self.nfa.get_accept()).is_ok()
+        self.states.iter().any(|&s| self.nfa.accept.contains(&s))
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.states.is_empty()
     }
 }
 
@@ -505,132 +301,101 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_nfa_empty() {
-        let regex = Regex::empty();
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Output(char);
 
-        runner.step('a');
+    fn cmp(a: &Output, b: &Output) -> std::cmp::Ordering {
+        a.0.cmp(&b.0)
+    }
+
+    #[test]
+    fn test_nfa_builder() {
+        let mut builder = NfaBuilder::new(cmp);
+        let start = builder.node();
+        let accept = builder.node();
+        builder.edge(start, accept, 'a', 'z', Output('a'));
+        builder.start(start);
+        builder.accept(accept);
+        let nfa = builder.build();
+
+        assert_eq!(nfa.start, vec![start]);
+        assert_eq!(nfa.accept, vec![accept]);
+        assert_eq!(nfa.edges.len(), 2);
+        assert_eq!(nfa.edges[start], vec![('a', 'z', accept, Output('a'))]);
+    }
+
+    #[test]
+    fn test_nfa_runner() {
+        let mut builder = NfaBuilder::new(cmp);
+        let start = builder.node();
+        let accept = builder.node();
+        builder.edge(start, accept, 'a', 'z', Output('a'));
+        builder.start(start);
+        builder.accept(accept);
+        let nfa = builder.build();
+
+        let mut runner = NfaRunner::new(&nfa);
+        assert!(!runner.is_accept());
+        assert_eq!(runner.step('a'), Some(Output('a')));
+        assert!(runner.is_accept());
+        assert_eq!(runner.step('b'), None);
         assert!(!runner.is_accept());
     }
 
     #[test]
     fn test_nfa_epsilon() {
-        let regex = Regex::epsilon();
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
+        let mut builder = NfaBuilder::new(cmp);
+        let start = builder.node();
+        let middle = builder.node();
+        let accept = builder.node();
+        builder.epsilon(start, middle);
+        builder.edge(middle, accept, 'a', 'z', Output('a'));
+        builder.start(start);
+        builder.accept(accept);
+        let nfa = builder.build();
 
+        let mut runner = NfaRunner::new(&nfa);
+        assert!(!runner.is_accept());
+        assert_eq!(runner.step('a'), Some(Output('a')));
         assert!(runner.is_accept());
     }
 
     #[test]
-    fn test_nfa_char() {
-        let regex = char('a');
-        let nfa = Nfa::thompson(&regex, &());
+    fn test_nfa_multiple_edges() {
+        let mut builder = NfaBuilder::new(cmp);
+        let start = builder.node();
+        let accept1 = builder.node();
+        let accept2 = builder.node();
+        builder.edge(start, accept1, 'a', 'm', Output('a'));
+        builder.edge(start, accept2, 'n', 'z', Output('n'));
+        builder.start(start);
+        builder.accept(accept1);
+        builder.accept(accept2);
+        let nfa = builder.build();
 
         let mut runner = NfaRunner::new(&nfa);
-
-        runner.step('a');
-        assert!(runner.is_accept(), "current states: {:?}", runner.current);
-
-        runner.reset();
-        runner.step('b');
         assert!(!runner.is_accept());
+        assert_eq!(runner.step('a'), Some(Output('a')));
+        assert!(runner.is_accept());
+        runner.reset();
+        assert_eq!(runner.step('n'), Some(Output('n')));
+        assert!(runner.is_accept());
     }
 
     #[test]
-    fn test_nfa_range() {
-        let regex = range('a', 'c');
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
-
-        runner.step('b');
-        assert!(runner.is_accept());
-
-        runner.reset();
-        runner.step('d');
-        assert!(!runner.is_accept());
-    }
-
-    #[test]
-    fn test_nfa_union() {
-        let regex = one_of("ab");
-        let mut nfa = Nfa::thompson(&regex, &());
-
-        nfa.epsilon_clean();
-        nfa.epsilon_clean();
-        nfa.epsilon_clean();
+    fn test_nfa_dead_state() {
+        let mut builder = NfaBuilder::new(cmp);
+        let start = builder.node();
+        let dead = builder.node();
+        builder.edge(start, dead, 'a', 'a', Output('a'));
+        builder.start(start);
+        let nfa = builder.build();
 
         let mut runner = NfaRunner::new(&nfa);
-
-        runner.step('a');
-        assert!(runner.is_accept());
-
-        runner.reset();
-        runner.step('b');
-        assert!(runner.is_accept());
-
-        runner.reset();
-        runner.step('c');
         assert!(!runner.is_accept());
-    }
-
-    #[test]
-    fn test_nfa_concat() {
-        let regex = char('a').concat(&char('b'));
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
-
-        runner.step('a');
-        assert!(!runner.is_accept());
-
-        runner.step('b');
-        assert!(runner.is_accept());
-
-        runner.reset();
-        runner.step('b');
-        assert!(!runner.is_accept());
-    }
-
-    #[test]
-    fn test_nfa_star() {
-        let regex = char('a').star();
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
-
-        assert!(runner.is_accept());
-
-        runner.step('a');
-        assert!(runner.is_accept());
-
-        runner.step('a');
-        assert!(runner.is_accept());
-
-        runner.step('b');
-        assert!(!runner.is_accept());
-    }
-
-    #[test]
-    fn test_nfa_complex() {
-        let regex = char('a').concat(&char('b')).union(&char('c').star());
-        let nfa = Nfa::thompson(&regex, &());
-        let mut runner = NfaRunner::new(&nfa);
-
-        runner.step('a');
-        assert!(!runner.is_accept());
-
-        runner.step('b');
-        assert!(runner.is_accept());
-
-        runner.reset();
-        runner.step('c');
-        assert!(runner.is_accept());
-
-        runner.step('c');
-        assert!(runner.is_accept());
-
-        runner.step('a');
-        assert!(!runner.is_accept());
+        assert_eq!(runner.step('a'), Some(Output('a')));
+        assert!(!runner.is_dead());
+        assert_eq!(runner.step('b'), None);
+        assert!(runner.is_dead());
     }
 }
