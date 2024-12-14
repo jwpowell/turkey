@@ -102,6 +102,14 @@ impl Regex {
     }
 
     pub fn concat(&self, other: &Self) -> Self {
+        if self.is_empty() || other.is_epsilon() {
+            return self.clone();
+        }
+
+        if other.is_empty() || self.is_epsilon() {
+            return other.clone();
+        }
+
         Self {
             node: Rc::new(RegexNode::Concat(self.clone(), other.clone())),
             nullable: self.nullable && other.nullable,
@@ -109,6 +117,14 @@ impl Regex {
     }
 
     pub fn union(&self, other: &Self) -> Self {
+        if self.is_empty() {
+            return other.clone();
+        }
+
+        if other.is_empty() {
+            return self.clone();
+        }
+
         Self {
             node: Rc::new(RegexNode::Union(self.clone(), other.clone())),
             nullable: self.nullable || other.nullable,

@@ -1,6 +1,16 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Write;
+use std::fmt::{self, Debug};
+
+macro_rules! run_optimization {
+    ($self:ident, $name:ident, $changed:ident) => {
+        while $self.$name() {
+            dbg!(stringify!($name));
+            $changed = true;
+        }
+    };
+}
 
 pub struct NfaBuilder<T> {
     nfa: Nfa<T>,
@@ -8,7 +18,7 @@ pub struct NfaBuilder<T> {
 
 impl<T> NfaBuilder<T>
 where
-    T: Clone,
+    T: Clone + Debug,
 {
     pub fn new(cmp: fn(&T, &T) -> std::cmp::Ordering) -> Self {
         NfaBuilder { nfa: Nfa::new(cmp) }
@@ -35,14 +45,14 @@ where
     }
 
     pub fn build(mut self) -> Nfa<T> {
+        //self.nfa.write_dot_to_file("a.dot");
         self.nfa.optimize();
+        //self.nfa.write_dot_to_file("b.dot");
 
         self.nfa
     }
 
-    pub fn merge(&mut self, other: &Self) -> (usize, usize, usize, usize) {
-        let self_start = self.node();
-        let self_accept = self.node();
+    pub fn merge(&mut self, other: &Self) -> (usize, usize) {
         let other_start = self.node();
         let other_accept = self.node();
 
@@ -62,14 +72,6 @@ where
             }
         }
 
-        for i in 0..self.nfa.start.len() {
-            self.epsilon(self_start, self.nfa.start[i]);
-        }
-
-        for i in 0..self.nfa.accept.len() {
-            self.epsilon(self.nfa.accept[i], self_accept);
-        }
-
         for &s in &other.nfa.start {
             self.epsilon(other_start, map[&s]);
         }
@@ -78,7 +80,135 @@ where
             self.epsilon(map[&s], other_accept);
         }
 
-        (self_start, self_accept, other_start, other_accept)
+        (other_start, other_accept)
+    }
+
+    pub fn from_regex(regex: &Regex, out: T, cmp: fn(&T, &T) -> Ordering) -> Nfa<T>
+    where
+        T: Clone + Debug,
+    {
+        let builder = Self::from_regex_inner(regex, out, cmp);
+        let nfa = builder.build();
+
+        nfa
+    }
+
+    fn from_regex_inner(r: &Regex, out: T, cmp: fn(&T, &T) -> Ordering) -> Self {
+        match &*r.node {
+            RegexNode::Empty => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Epsilon => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                builder.epsilon(start, accept);
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Range(lo, hi) => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                builder.edge(start, accept, *lo, *hi, out);
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Concat(a, b) => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                let nfa_a = Self::from_regex_inner(a, out.clone(), cmp);
+                let nfa_b = Self::from_regex_inner(b, out.clone(), cmp);
+
+                let (start_a, accept_a) = builder.merge(&nfa_a);
+                let (start_b, accept_b) = builder.merge(&nfa_b);
+
+                builder.epsilon(start, start_a);
+                builder.epsilon(accept_a, start_b);
+                builder.epsilon(accept_b, accept);
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Union(a, b) => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                let nfa_a = Self::from_regex_inner(a, out.clone(), cmp);
+                let nfa_b = Self::from_regex_inner(b, out.clone(), cmp);
+
+                let (start_a, accept_a) = builder.merge(&nfa_a);
+                let (start_b, accept_b) = builder.merge(&nfa_b);
+
+                builder.epsilon(start, start_a);
+                builder.epsilon(start, start_b);
+
+                builder.epsilon(accept_a, accept);
+                builder.epsilon(accept_b, accept);
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Intersect(a, b) => {
+                todo!()
+            }
+
+            RegexNode::Star(a) => {
+                let mut builder = NfaBuilder::new(cmp);
+
+                let start = builder.node();
+                let accept = builder.node();
+
+                let nfa_a = Self::from_regex_inner(a, out.clone(), cmp);
+
+                let (start_a, accept_a) = builder.merge(&nfa_a);
+
+                builder.epsilon(start, start_a);
+                builder.epsilon(start, accept);
+
+                builder.epsilon(accept_a, start_a);
+                builder.epsilon(accept_a, accept);
+
+                builder.start(start);
+                builder.accept(accept);
+
+                builder
+            }
+
+            RegexNode::Not(regex) => todo!(),
+        }
     }
 }
 
@@ -104,6 +234,8 @@ where
         }
     }
 }
+
+use crate::lexer::regex::{Regex, RegexNode};
 
 impl<T> Nfa<T>
 where
@@ -182,6 +314,68 @@ where
         self.accept.push(state);
     }
 
+    fn try_remove_epsilon_node(&mut self, state: usize) -> bool {
+        if !self.edges[state].is_empty() {
+            return false;
+        }
+
+        if self
+            .edges
+            .iter()
+            .any(|edges| edges.iter().any(|&(_, _, to, _)| to == state))
+        {
+            return false;
+        }
+
+        let epsilons_from = self
+            .epsilons
+            .iter()
+            .enumerate()
+            .filter_map(|(i, eps)| if eps.contains(&state) { Some(i) } else { None })
+            .collect::<Vec<_>>();
+
+        let epsilons_to = self.epsilons[state].clone();
+
+        let mut changed = false;
+
+        for &from in &epsilons_from {
+            for &to in &epsilons_to {
+                if from != to && !self.epsilons[from].contains(&to) {
+                    changed = true;
+                    self.epsilon(from, to);
+                }
+            }
+        }
+
+        if changed {
+            self.remove_node(state);
+        }
+
+        changed
+    }
+
+    fn optimize_remove_epsilon_nodes(&mut self) -> bool {
+        let mut more = false;
+        let mut changed = false;
+        loop {
+            more = false;
+
+            for i in 0..self.node_count() {
+                dbg!(self.edges.len());
+                if self.try_remove_epsilon_node(dbg!(i)) {
+                    more = true;
+                    break;
+                }
+            }
+            changed |= more;
+            if !more {
+                break;
+            }
+        }
+
+        changed
+    }
+
     fn remove_node(&mut self, deleted: usize) {
         let old_id = self.edges.len() - 1;
         let new_id = deleted;
@@ -229,15 +423,20 @@ where
         }
     }
 
-    fn optimize_deduplicate(&mut self) {
+    fn optimize_deduplicate(&mut self) -> bool {
+        let old_start_len = self.start.len();
         self.start.sort_unstable();
         self.start.dedup();
 
+        let old_accept_len = self.accept.len();
         self.accept.sort_unstable();
         self.accept.dedup();
+
+        old_start_len != self.start.len() || old_accept_len != self.accept.len()
     }
 
-    fn optimize_epsilon_closure(&mut self) {
+    fn optimize_epsilon_closure(&mut self) -> bool {
+        let mut changed = false;
         let mut visited = vec![false; self.edges.len()];
         let mut stack = vec![];
         let mut closure = vec![];
@@ -264,10 +463,14 @@ where
                 }
             }
 
+            let old_len = self.epsilons[i].len();
             self.epsilons[i].extend(closure.drain(..));
             self.epsilons[i].sort_unstable();
             self.epsilons[i].dedup();
+            changed |= old_len != self.epsilons[i].len();
         }
+
+        changed
     }
 
     fn is_reachable(&self, from: usize, to: usize) -> bool {
@@ -300,9 +503,32 @@ where
         visited[to]
     }
 
-    fn optimize_remove_unreachable(&mut self) {
+    fn optimize_remove_unreachable(&mut self) -> bool {
+        let mut changed = false;
+
         let mut deleted = vec![];
-        let mut more = true;
+
+        for i in 0..self.node_count() {
+            if !self.start.iter().any(|&a| self.is_reachable(a, i)) {
+                deleted.push(i);
+            }
+        }
+
+        deleted.sort_unstable();
+        deleted.dedup();
+
+        for e in deleted.iter().rev() {
+            changed = true;
+            self.remove_node(*e);
+        }
+
+        changed
+    }
+
+    fn optimize_remove_dead_nodes(&mut self) -> bool {
+        let mut changed = false;
+
+        let mut deleted = vec![];
 
         for i in 0..self.node_count() {
             if !self.accept.iter().any(|&a| self.is_reachable(i, a)) {
@@ -314,50 +540,46 @@ where
         deleted.dedup();
 
         for e in deleted.iter().rev() {
+            changed = true;
             self.remove_node(*e);
         }
+
+        changed
     }
 
-    fn optimize_remove_dead_nodes(&mut self) {
-        let mut deleted = vec![];
-
-        for i in 0..self.edges.len() {
-            let dead = self.edges[i].is_empty()
-                && self.epsilons[i].is_empty()
-                && !self.accept.contains(&i);
-
-            if dead {
-                deleted.push(i);
-            }
-        }
-
-        deleted.sort_unstable();
-        deleted.dedup();
-
-        for e in deleted.iter().rev() {
-            self.remove_node(*e);
-        }
-    }
-
-    fn optimize_start(&mut self) {
+    fn optimize_start(&mut self) -> bool {
         let mut xs = vec![];
 
         for &s in &self.start {
             xs.extend(self.epsilons[s].iter().copied());
         }
 
+        let old_len = self.start.len();
         self.start.extend(xs);
 
         self.start.sort_unstable();
         self.start.dedup();
+
+        self.start.len() != old_len
     }
 
     fn optimize(&mut self) {
-        self.optimize_deduplicate();
-        self.optimize_epsilon_closure();
-        self.optimize_remove_unreachable();
-        self.optimize_remove_dead_nodes();
-        self.optimize_start();
+        let mut changed = true;
+
+        loop {
+            changed = false;
+
+            run_optimization!(self, optimize_deduplicate, changed);
+            run_optimization!(self, optimize_epsilon_closure, changed);
+            run_optimization!(self, optimize_remove_epsilon_nodes, changed);
+            run_optimization!(self, optimize_remove_unreachable, changed);
+            run_optimization!(self, optimize_remove_dead_nodes, changed);
+            run_optimization!(self, optimize_start, changed);
+
+            if !changed {
+                break;
+            }
+        }
     }
 
     fn write_dot<W: std::io::Write>(&self, io: &mut W) -> std::io::Result<()>
@@ -711,5 +933,21 @@ mod tests {
         //builder.nfa.write_dot_to_file("a.dot");
         let nfa = builder.build();
         //nfa.write_dot_to_file("b.dot");
+    }
+
+    use crate::lexer::regex::Regex;
+
+    #[test]
+    fn test_nfa_from_regex() {
+        let a = Regex::char('a');
+        let b = Regex::char('b');
+        let c = Regex::char('c');
+        let d = Regex::char('d');
+
+        let r = &[a, b, c, d]
+            .iter()
+            .fold(Regex::empty(), |acc, r| Regex::union(&acc, r));
+
+        let nfa = NfaBuilder::from_regex(&r, Output('a'), cmp);
     }
 }
