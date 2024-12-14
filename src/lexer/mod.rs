@@ -1,3 +1,2 @@
-mod nfa;
 mod regex;
-mod token;
+pub mod token;

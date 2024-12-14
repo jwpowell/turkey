@@ -1,8 +1,6 @@
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use super::nfa::Nfa;
-
 #[derive(Clone)]
 pub struct Regex {
     pub(crate) node: Rc<RegexNode>,
@@ -15,9 +13,7 @@ pub enum RegexNode {
     Range(char, char),
     Concat(Regex, Regex),
     Union(Regex, Regex),
-    Intersect(Regex, Regex),
     Star(Regex),
-    Not(Regex),
 }
 
 impl Debug for Regex {
@@ -28,39 +24,9 @@ impl Debug for Regex {
             RegexNode::Range(lo, hi) => write!(f, "(range {:?} {:?})", lo, hi),
             RegexNode::Concat(a, b) => write!(f, "(concat {:?} {:?})", a, b),
             RegexNode::Union(a, b) => write!(f, "(union {:?} {:?})", a, b),
-            RegexNode::Intersect(a, b) => write!(f, "(intersect {:?} {:?})", a, b),
             RegexNode::Star(a) => write!(f, "(star {:?})", a),
-            RegexNode::Not(a) => write!(f, "(not {:?})", a),
         }
     }
-}
-
-pub fn empty() -> Regex {
-    Regex::empty()
-}
-
-pub fn epsilon() -> Regex {
-    Regex::epsilon()
-}
-
-pub fn any() -> Regex {
-    Regex::any()
-}
-
-pub fn char(c: char) -> Regex {
-    Regex::char(c)
-}
-
-pub fn range(lo: char, hi: char) -> Regex {
-    Regex::range(lo, hi)
-}
-
-pub fn one_of(chars: &str) -> Regex {
-    Regex::one_of(chars)
-}
-
-pub fn none_of(chars: &str) -> Regex {
-    Regex::none_of(chars)
 }
 
 impl Regex {
@@ -131,13 +97,6 @@ impl Regex {
         }
     }
 
-    pub fn intersect(&self, other: &Self) -> Self {
-        Self {
-            node: Rc::new(RegexNode::Intersect(self.clone(), other.clone())),
-            nullable: self.nullable && other.nullable,
-        }
-    }
-
     pub fn star(&self) -> Self {
         Self {
             node: Rc::new(RegexNode::Star(self.clone())),
@@ -153,13 +112,6 @@ impl Regex {
         self.union(&Self::epsilon())
     }
 
-    pub fn not(&self) -> Self {
-        Self {
-            node: Rc::new(RegexNode::Not(self.clone())),
-            nullable: !self.nullable,
-        }
-    }
-
     pub fn one_of(chars: &str) -> Self {
         let mut r = Self::empty();
 
@@ -171,10 +123,280 @@ impl Regex {
     }
 
     pub fn none_of(chars: &str) -> Self {
-        Self::one_of(chars).not()
+        let mut r = Self::empty();
+
+        let mut chars = chars.chars().collect::<Vec<_>>();
+
+        chars.sort_unstable();
+        chars.dedup();
+
+        for (&a, &b) in chars.iter().zip(chars.iter().skip(1)) {
+            let anext = incr_char(a);
+            let bprev = decr_char(b);
+
+            if bprev != a {
+                r = r.union(&Self::range(anext, bprev));
+            }
+        }
+
+        if let Some(a) = chars.first() {
+            if *a != char::MIN {
+                r = r.union(&Self::range(char::MIN, decr_char(*a)));
+            }
+        }
+
+        if let Some(b) = chars.last() {
+            if *b != char::MAX {
+                r = r.union(&Self::range(incr_char(*b), char::MAX));
+            }
+        }
+
+        r
     }
 
-    pub fn nfa<T: Clone>(&self, output: T) -> Nfa<T> {
-        todo!()
+    fn is_nullable(&self) -> bool {
+        self.nullable
+    }
+
+    fn v(&self) -> Self {
+        if self.is_nullable() {
+            Self::epsilon()
+        } else {
+            Self::empty()
+        }
+    }
+
+    fn derivative(&self, c: char) -> Self {
+        match &*self.node {
+            RegexNode::Empty => Self::empty(),
+            RegexNode::Epsilon => Self::empty(),
+            RegexNode::Range(lo, hi) => {
+                if *lo <= c && c <= *hi {
+                    Self::epsilon()
+                } else {
+                    Self::empty()
+                }
+            }
+            RegexNode::Concat(a, b) => {
+                let da = a.derivative(c);
+                let db = b.derivative(c);
+                let va = a.v();
+
+                da.concat(b).union(&va.concat(&db))
+            }
+            RegexNode::Union(a, b) => a.derivative(c).union(&b.derivative(c)),
+            RegexNode::Star(a) => a.derivative(c).concat(self),
+        }
+    }
+}
+
+fn incr_char(c: char) -> char {
+    assert!(c != char::MAX, "cannot increment MAX char");
+
+    if c as u32 == 0xD7FF {
+        char::from_u32(0xE000).unwrap()
+    } else {
+        char::from_u32(c as u32 + 1).unwrap()
+    }
+}
+
+fn decr_char(c: char) -> char {
+    assert!(c != char::MIN, "cannot decrement MIN char");
+
+    if c as u32 == 0xE000 {
+        char::from_u32(0xD7FF).unwrap()
+    } else {
+        char::from_u32(c as u32 - 1).unwrap()
+    }
+}
+
+pub struct Matcher {
+    regex: Regex,
+    state: Regex,
+}
+
+impl Matcher {
+    pub fn new(regex: &Regex) -> Self {
+        Self {
+            regex: regex.clone(),
+            state: regex.clone(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.state = self.regex.clone();
+    }
+
+    pub fn put(&mut self, c: char) {
+        self.state = self.state.derivative(c);
+    }
+
+    pub fn is_accepted(&self) -> bool {
+        self.state.is_nullable()
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.state.is_empty()
+    }
+
+    pub fn match_string(&mut self, s: &str) -> bool {
+        self.reset();
+
+        for c in s.chars() {
+            self.put(c);
+        }
+
+        self.is_accepted()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_matcher_empty() {
+        let regex = Regex::empty();
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_epsilon() {
+        let regex = Regex::epsilon();
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(matcher.is_accepted());
+        matcher.put('a');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_char() {
+        let regex = Regex::char('a');
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('b');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_concat() {
+        let regex = Regex::char('a').concat(&Regex::char('b'));
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(!matcher.is_accepted());
+        matcher.put('b');
+        assert!(matcher.is_accepted());
+        matcher.put('c');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_union() {
+        let regex = Regex::char('a').union(&Regex::char('b'));
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.reset();
+        matcher.put('b');
+        assert!(matcher.is_accepted());
+        matcher.reset();
+        matcher.put('c');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_star() {
+        let regex = Regex::char('a').star();
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('b');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_plus() {
+        let regex = Regex::char('a').plus();
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('b');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_opt() {
+        let regex = Regex::char('a').opt();
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.put('b');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_one_of() {
+        let regex = Regex::one_of("abc");
+        let mut matcher = Matcher::new(&regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(matcher.is_accepted());
+        matcher.reset();
+        matcher.put('b');
+        assert!(matcher.is_accepted());
+        matcher.reset();
+        matcher.put('c');
+        assert!(matcher.is_accepted());
+        matcher.reset();
+        matcher.put('d');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+    }
+
+    #[test]
+    fn test_matcher_none_of() {
+        let regex = Regex::none_of("abc");
+        let mut matcher = Matcher::new(&regex);
+
+        println!("{:?}", regex);
+
+        assert!(!matcher.is_accepted());
+        matcher.put('a');
+        assert!(!matcher.is_accepted());
+        assert!(matcher.is_dead());
+        matcher.reset();
+        matcher.put('d');
+        assert!(matcher.is_accepted());
     }
 }
