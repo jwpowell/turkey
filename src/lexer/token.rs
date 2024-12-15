@@ -15,6 +15,7 @@ pub enum Token {
     Whitespace,
     Newline,
 
+    String,
     Identifier,
     Integer,
     Float,
@@ -36,6 +37,7 @@ impl Token {
             Token::Comment => Self::regex_comment(),
             Token::Whitespace => Self::regex_whitespace(),
             Token::Newline => Self::regex_newline(),
+            Token::String => Self::regex_string(),
         }
     }
 
@@ -79,7 +81,10 @@ impl Token {
             .union(&Regex::char('E'))
             .concat(&integer.plus());
 
-        integer.concat(&dot.concat(&fraction.opt().concat(&exponent.opt())))
+        let exp = integer.concat(&exponent);
+        let frac = integer.concat(&dot.concat(&fraction.opt().concat(&exponent.opt())));
+
+        frac.union(&exp)
     }
 
     fn regex_quote() -> Regex {
@@ -107,11 +112,19 @@ impl Token {
     }
 
     fn regex_whitespace() -> Regex {
-        Regex::one_of(" \t")
+        Regex::one_of(" \t").plus()
     }
 
     fn regex_newline() -> Regex {
         Regex::char('\n')
+    }
+
+    fn regex_string() -> Regex {
+        let escape = Regex::char('\\').concat(&Regex::any());
+        let normal = Regex::none_of("\"\\");
+        let string = normal.union(&escape).star();
+
+        string
     }
 }
 
