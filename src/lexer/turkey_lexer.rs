@@ -1,5 +1,4 @@
 use crate::lexer::lexer::Lexer;
-use crate::lexer::regex::Regex;
 use crate::lexer::token::Token;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
