@@ -1,4 +1,4 @@
-use super::regex::Regex;
+use crate::lexer::regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Token {
