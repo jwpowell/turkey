@@ -1,5 +1,6 @@
 use super::regex::Regex;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Token {
     LParen,
     RParen,
