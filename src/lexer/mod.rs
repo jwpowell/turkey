@@ -25,10 +25,10 @@ pub struct Lexer<T, M> {
 
 struct Rule<T> {
     token: T,
-    regex: Regex,
+    //regex: Regex,
     matcher: Matcher,
     keep_span: bool,
-    from_mode: usize,
+    //from_mode: usize,
     to_mode: usize,
 }
 
@@ -106,10 +106,10 @@ where
 
         self.modes[from_mode_index].push(Rule {
             token,
-            regex: regex.clone(),
+            //regex: regex.clone(),
             matcher,
             keep_span,
-            from_mode: from_mode_index,
+            //from_mode: from_mode_index,
             to_mode: to_mode_index,
         });
     }
@@ -229,7 +229,6 @@ mod tests {
     enum Token {
         A,
         B,
-        C,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
