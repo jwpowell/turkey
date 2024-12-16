@@ -30,6 +30,7 @@ pub struct Lexeme<T> {
     pub span: Option<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct LexerError {
     pub message: String,
     pub position: usize,
@@ -88,6 +89,18 @@ where
         });
     }
 
+    pub fn with_rule(
+        &mut self,
+        token: T,
+        regex: &Regex,
+        mode_from: M,
+        mode_to: M,
+        keep_span: bool,
+    ) -> &mut Self {
+        self.add_rule(token, regex, mode_from, mode_to, keep_span);
+        self
+    }
+
     pub fn reset(&mut self) {
         self.current_mode = self.start_mode;
         self.cursor = 0;
@@ -138,6 +151,9 @@ where
         let mut all_dead = true;
         let mut last_accepted = None;
         while self.cursor < self.input.len() {
+            if self.is_error() {
+                return;
+            }
             let c = self.input[self.cursor];
 
             for (i, rule) in self.modes[self.current_mode].iter_mut().enumerate() {
@@ -165,9 +181,13 @@ where
     fn emit(&mut self) {
         if self.last_accepted.is_none() {
             self.error = Some(LexerError {
-                message: "unexpected input".to_string(),
+                message: format!(
+                    "mode: {:?}, input: {:?}, cursor: {:?}",
+                    self.current_mode, self.input, self.cursor
+                ),
                 position: self.cursor,
             });
+            return;
         }
 
         let (rule, length) = self.last_accepted.unwrap();
@@ -283,7 +303,6 @@ mod test {
         }
 
         for (a, e) in actual.iter().zip(expected.iter()) {
-            println!("{:?}\n{:?}\n", a, e);
             assert_eq!(a, e);
         }
 

@@ -168,6 +168,10 @@ fn char_incr(c: char) -> char {
 }
 
 fn to_nfa_none_of(chars: &str) -> Nfa {
+    let mut chars = chars.chars().collect::<Vec<_>>();
+    chars.sort_unstable();
+    chars.dedup();
+
     if chars.is_empty() {
         return to_nfa_any();
     }
@@ -180,7 +184,7 @@ fn to_nfa_none_of(chars: &str) -> Nfa {
     nfa.add_start(start);
     nfa.add_accept(accept);
 
-    let inner_ranges = chars.chars().zip(chars.chars().skip(1));
+    let inner_ranges = chars.iter().copied().zip(chars.iter().copied().skip(1));
 
     let mut sub_nfas = Vec::new();
     for (a, b) in inner_ranges {
@@ -190,8 +194,8 @@ fn to_nfa_none_of(chars: &str) -> Nfa {
         }
     }
 
-    let first = chars.chars().next().unwrap();
-    let last = chars.chars().last().unwrap();
+    let first = chars.first().copied().unwrap();
+    let last = chars.last().copied().unwrap();
 
     if first != char::MIN {
         let nfa_range = to_nfa_range(char::MIN, char_decr(first));
@@ -290,7 +294,7 @@ mod test {
             nfa.put(c);
         }
 
-        assert_eq!(nfa.is_accept(), expected);
+        assert_eq!(nfa.is_accept(), expected, "s: {:?}", s);
     }
 
     #[test]
@@ -365,5 +369,27 @@ mod test {
         test_regex(&regex, "ab", false);
         test_regex(&regex, "bc", false);
         test_regex(&regex, "", false);
+    }
+
+    #[test]
+    fn test_none_of() {
+        let regex = Regex::none_of("(){}[];,'\" \t\n`");
+        test_regex(&regex, "a", true);
+        test_regex(&regex, "b", true);
+        test_regex(&regex, "(", false);
+        test_regex(&regex, ")", false);
+        test_regex(&regex, "{", false);
+        test_regex(&regex, "}", false);
+        test_regex(&regex, "[", false);
+        test_regex(&regex, "]", false);
+        test_regex(&regex, ";", false);
+        test_regex(&regex, ",", false);
+        test_regex(&regex, "'", false);
+        test_regex(&regex, "\"", false);
+        test_regex(&regex, " ", false);
+        test_regex(&regex, "\t", false);
+        test_regex(&regex, "\n", false);
+        test_regex(&regex, "`", false);
+        test_regex(&regex, "&", true);
     }
 }

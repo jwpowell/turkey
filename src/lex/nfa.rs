@@ -135,6 +135,20 @@ impl Nfa {
         self.remove_unreachable_nodes();
         self.remove_dead_nodes();
 
+        self.start.sort_unstable();
+        self.start.dedup();
+
+        self.accept.sort_unstable();
+        self.accept.dedup();
+
+        for node in 0..self.nodes.len() {
+            self.nodes[node].edges.sort_unstable();
+            self.nodes[node].edges.dedup();
+
+            self.nodes[node].epsilons.sort_unstable();
+            self.nodes[node].epsilons.dedup();
+        }
+
         self.optimized = true;
     }
 
@@ -303,6 +317,9 @@ impl Nfa {
                 }
             }
         }
+
+        self.next.sort_unstable();
+        self.next.dedup();
 
         std::mem::swap(&mut self.current, &mut self.next);
     }
