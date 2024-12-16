@@ -352,14 +352,34 @@ mod tests {
         nfa.add_start(start);
         nfa.add_accept(accept);
 
-        let io = std::fs::File::create("before.dot").unwrap();
-        write_nfa_dot(&mut nfa, io).unwrap();
+        let dirpath = "target/debug/dotfiles";
+        match std::fs::create_dir(dirpath) {
+            Err(e) => {
+                if !matches!(e.kind(), std::io::ErrorKind::AlreadyExists) {
+                    panic!("Failed to create directory: {}", e);
+                }
+            }
 
+            _ => {}
+        }
+
+        write_nfa_dot_file(&nfa, &format!("{}/before.dot", dirpath)).unwrap();
         nfa.reset();
+        write_nfa_dot_file(&nfa, &format!("{}/after.dot", dirpath)).unwrap();
 
-        let io = std::fs::File::create("after.dot").unwrap();
-        write_nfa_dot(&mut nfa, io).unwrap();
         nfa
+    }
+
+    const WRITE_DOT_FILES: bool = false;
+
+    fn write_nfa_dot_file(nfa: &Nfa, path: &str) -> std::io::Result<()> {
+        if !WRITE_DOT_FILES {
+            return Ok(());
+        }
+
+        let mut io = std::fs::File::create(path)?;
+        write_nfa_dot(&nfa, &mut io)?;
+        Ok(())
     }
 
     fn write_nfa_dot<W>(nfa: &Nfa, mut io: W) -> std::io::Result<()>
