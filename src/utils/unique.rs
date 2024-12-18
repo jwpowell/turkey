@@ -39,3 +39,7 @@ impl Unique {
         (0..).map(|_| Self::new())
     }
 }
+
+pub fn unique() -> Unique {
+    Unique::new()
+}
