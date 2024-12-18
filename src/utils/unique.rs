@@ -18,9 +18,18 @@ impl Unique {
         let new_id = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         unsafe {
-            // We know that new_id is non-zero because we just incremented it.
-            // It won't overflow because it's 64-bit unsigned which will take
-            // well beyond the lifetime of the program to reach u64::MAX.
+            // `new_id` starts at 1. It is never decremented directly. So, the only way it could be
+            // 0 is if the `fetch_add` above overflowed. That would happen after (2^64)-1
+            // increments.
+            //
+            // If we increment once a cycle on 256 threads on a 6GHz processor, which is an
+            // extremely generous estimate, it would take ((1/6GHz) * (2^64) - 1 seconds)/(256
+            // threads) = 4.5 months.
+            //
+            // ASSUMPTION: This program will not be running for more than 4.5 months.
+            // ASSUMPTION: This program will not be running on a system as powerful as this.
+            //
+            // Under these assumptions, `new_id` will never  be 0.
 
             Self(NonZeroU64::new_unchecked(new_id))
         }
