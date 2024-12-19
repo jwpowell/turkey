@@ -12,23 +12,27 @@ static COUNTER: AtomicU64 = AtomicU64::new(1);
 /// ~~~
 /// use std::thread;
 ///
+/// use turkey::utils::unique;
+///
 /// let mut v1 = Vec::new();
 /// let mut v2 = Vec::new();
 ///
-/// let t1 = thread::spawn(|| {
+/// let t1 = thread::spawn(move || {
 ///     for _ in 0..1000 {
 ///         v1.push(unique());
 ///     }
+///     v1
 /// });
 ///
-/// let t2 = thread::spawn(|| {
+/// let t2 = thread::spawn(move || {
 ///     for _ in 0..1000 {
 ///         v2.push(unique());
 ///     }
+///     v2
 /// });
 ///
-/// t1.join().unwrap();
-/// t2.join().unwrap();
+/// let v1 = t1.join().unwrap();
+/// let v2 = t2.join().unwrap();
 ///
 /// let mut all = v1;
 /// all.extend(v2);
