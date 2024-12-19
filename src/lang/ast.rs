@@ -3,8 +3,6 @@
 /// This module provides the core data structures and traits for working with AST nodes,
 /// including support for different types of values (nil, pairs, symbols, numbers, etc.)
 /// and tree traversal operations.
-use std::rc::Rc;
-
 use crate::utils::tree::*;
 
 use num::BigInt;
