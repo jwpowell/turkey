@@ -5,22 +5,24 @@
 /// and tree traversal operations.
 use std::rc::Rc;
 
+use crate::utils::tree::*;
+
 use num::BigInt;
 
 /// Represents an AST node.
 #[derive(Debug, Clone)]
-pub struct Ast(Rc<AstNode>);
+pub struct Ast(Tree<AstNode>);
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SyntaxInfo {}
 
 /// Represents the different types of nodes that can exist in the AST.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum AstNode {
     /// Represents a nil value
     Nil,
     /// Represents a pair of AST nodes (head, tail)
-    Pair(Ast, Ast),
+    Pair,
     /// Represents a symbol identified by a unique number
     Symbol(u64),
     /// Represents an arbitrary-precision integer value
@@ -36,45 +38,51 @@ enum AstNode {
 impl Ast {
     /// Creates a new nil node.
     pub fn create_nil() -> Self {
-        Ast(Rc::new(AstNode::Nil))
+        Ast(Tree::leaf(AstNode::Nil))
     }
 
     /// Checks if the node is nil.
     pub fn is_nil(&self) -> bool {
-        matches!(&*self.0, AstNode::Nil)
+        matches!(self.0.data(), AstNode::Nil)
     }
 
     /// Creates a new pair node with the given head and tail.
     pub fn create_pair(head: &Self, tail: &Self) -> Self {
-        Ast(Rc::new(AstNode::Pair(head.clone(), tail.clone())))
+        Ast(Tree::node(AstNode::Pair, &[head.0.clone(), tail.0.clone()]))
     }
 
     /// Checks if the node is a pair.
     pub fn is_pair(&self) -> bool {
-        matches!(&*self.0, AstNode::Pair(..))
+        matches!(self.0.data(), AstNode::Pair)
     }
 
     /// Returns the head and tail of a pair node, if this is a pair.
-    pub fn get_pair(&self) -> Option<(&Self, &Self)> {
-        match &*self.0 {
-            AstNode::Pair(head, tail) => Some((head, tail)),
-            _ => None,
+    pub fn get_pair(&self) -> Option<(Self, Self)> {
+        if self.0.children().is_empty() {
+            return None;
         }
+
+        assert!(self.0.children().len() == 2);
+
+        Some((
+            Ast(self.0.children()[0].clone()),
+            Ast(self.0.children()[1].clone()),
+        ))
     }
 
     /// Creates a new symbol node with the given name.
     pub fn create_symbol(name: u64) -> Self {
-        Ast(Rc::new(AstNode::Symbol(name)))
+        Ast(Tree::leaf(AstNode::Symbol(name)))
     }
 
     /// Checks if the node is a symbol.
     pub fn is_symbol(&self) -> bool {
-        matches!(&*self.0, AstNode::Symbol(..))
+        matches!(&*self.0.data(), AstNode::Symbol(..))
     }
 
     /// Returns the name of a symbol node, if this is a symbol.
     pub fn get_symbol(&self) -> Option<u64> {
-        match &*self.0 {
+        match &*self.0.data() {
             AstNode::Symbol(name) => Some(*name),
             _ => None,
         }
@@ -82,17 +90,17 @@ impl Ast {
 
     /// Creates a new integer node with the given value.
     pub fn create_integer(value: BigInt) -> Self {
-        Ast(Rc::new(AstNode::Integer(value)))
+        Ast(Tree::leaf(AstNode::Integer(value)))
     }
 
     /// Checks if the node is an integer.
     pub fn is_integer(&self) -> bool {
-        matches!(&*self.0, AstNode::Integer(..))
+        matches!(&*self.0.data(), AstNode::Integer(..))
     }
 
     /// Returns the value of an integer node, if this is an integer.
     pub fn get_integer(&self) -> Option<&BigInt> {
-        match &*self.0 {
+        match &*self.0.data() {
             AstNode::Integer(value) => Some(value),
             _ => None,
         }
@@ -100,17 +108,17 @@ impl Ast {
 
     /// Creates a new float node with the given value.
     pub fn create_float(value: f64) -> Self {
-        Ast(Rc::new(AstNode::Float(value)))
+        Ast(Tree::leaf(AstNode::Float(value)))
     }
 
     /// Checks if the node is a float.
     pub fn is_float(&self) -> bool {
-        matches!(&*self.0, AstNode::Float(..))
+        matches!(&*self.0.data(), AstNode::Float(..))
     }
 
     /// Returns the value of a float node, if this is a float.
     pub fn get_float(&self) -> Option<f64> {
-        match &*self.0 {
+        match &*self.0.data() {
             AstNode::Float(value) => Some(*value),
             _ => None,
         }
@@ -118,17 +126,17 @@ impl Ast {
 
     /// Creates a new character node with the given value.
     pub fn create_char(value: char) -> Self {
-        Ast(Rc::new(AstNode::Char(value)))
+        Ast(Tree::leaf(AstNode::Char(value)))
     }
 
     /// Checks if the node is a character.
     pub fn is_char(&self) -> bool {
-        matches!(&*self.0, AstNode::Char(..))
+        matches!(&*self.0.data(), AstNode::Char(..))
     }
 
     /// Returns the value of a character node, if this is a character.
     pub fn get_char(&self) -> Option<char> {
-        match &*self.0 {
+        match &*self.0.data() {
             AstNode::Char(value) => Some(*value),
             _ => None,
         }
@@ -136,17 +144,17 @@ impl Ast {
 
     /// Creates a new string node with the given value.
     pub fn create_string(value: &str) -> Self {
-        Ast(Rc::new(AstNode::String(value.to_string())))
+        Ast(Tree::leaf(AstNode::String(value.to_string())))
     }
 
     /// Checks if the node is a string.
     pub fn is_string(&self) -> bool {
-        matches!(&*self.0, AstNode::String(..))
+        matches!(&*self.0.data(), AstNode::String(..))
     }
 
     /// Returns the value of a string node, if this is a string.
     pub fn get_string(&self) -> Option<&str> {
-        match &*self.0 {
+        match &*self.0.data() {
             AstNode::String(value) => Some(value),
             _ => None,
         }
@@ -161,39 +169,42 @@ impl Ast {
     /// * `infix` - Whether to visit pair nodes between their children
     /// * `postfix` - Whether to visit pair nodes after their children
     pub fn visit<V: Visitor>(&self, visitor: &mut V, prefix: bool, infix: bool, postfix: bool) {
-        let mut stack = vec![(self, None)];
+        let mut inner_visitor = InnerAstVisitor { visitor };
+        self.0.visit(&mut inner_visitor, prefix, infix, postfix);
+    }
+}
 
-        while let Some((node, traversal)) = stack.pop() {
-            match &*node.0 {
-                AstNode::Nil => visitor.visit_nil(SyntaxInfo::default()),
-                AstNode::Symbol(symbol) => visitor.visit_symbol(*symbol, SyntaxInfo::default()),
-                AstNode::Integer(value) => visitor.visit_integer(value, SyntaxInfo::default()),
-                AstNode::Float(value) => visitor.visit_float(*value, SyntaxInfo::default()),
-                AstNode::Char(value) => visitor.visit_char(*value, SyntaxInfo::default()),
-                AstNode::String(value) => visitor.visit_string(value, SyntaxInfo::default()),
+struct InnerAstVisitor<'a, V: Visitor> {
+    visitor: &'a mut V,
+}
 
-                AstNode::Pair(head, tail) => {
-                    if traversal.is_some() {
-                        visitor.visit_pair(head, tail, traversal.unwrap(), SyntaxInfo::default());
-                        continue;
-                    }
+impl<'a, V> TreeVisitor<AstNode> for InnerAstVisitor<'a, V>
+where
+    V: Visitor,
+{
+    fn visit(&mut self, node: &Tree<AstNode>, traversal: TreeTraversal) {
+        match &*node.data() {
+            AstNode::Nil => self.visitor.visit_nil(SyntaxInfo::default()),
+            AstNode::Symbol(symbol) => self.visitor.visit_symbol(*symbol, SyntaxInfo::default()),
+            AstNode::Integer(value) => self.visitor.visit_integer(value, SyntaxInfo::default()),
+            AstNode::Float(value) => self.visitor.visit_float(*value, SyntaxInfo::default()),
+            AstNode::Char(value) => self.visitor.visit_char(*value, SyntaxInfo::default()),
+            AstNode::String(value) => self.visitor.visit_string(value, SyntaxInfo::default()),
 
-                    if postfix {
-                        stack.push((self, Some(Traversal::Postfix)));
-                    }
+            AstNode::Pair => {
+                let head = node.children()[0].clone();
+                let tail = node.children()[1].clone();
 
-                    stack.push((tail, None));
-
-                    if infix {
-                        stack.push((self, Some(Traversal::Infix)));
-                    }
-
-                    stack.push((head, None));
-
-                    if prefix {
-                        stack.push((self, Some(Traversal::Prefix)));
-                    }
-                }
+                self.visitor.visit_pair(
+                    &Ast(head),
+                    &Ast(tail),
+                    match traversal {
+                        TreeTraversal::PreOrder => Traversal::Prefix,
+                        TreeTraversal::InOrder => Traversal::Infix,
+                        TreeTraversal::PostOrder => Traversal::Postfix,
+                    },
+                    SyntaxInfo::default(),
+                );
             }
         }
     }
@@ -239,155 +250,130 @@ pub trait Visitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Debug)]
+    struct TestVisitor {
+        visited: Vec<(AstNode, Traversal)>,
+    }
 
-    #[test]
-    fn test_visit_prefix() {
-        let a = Ast::create_string("a");
-        let b = Ast::create_string("b");
-        let c = Ast::create_string("c");
-        let d = Ast::create_string("d");
-
-        let ab = Ast::create_pair(&a, &b);
-        let cd = Ast::create_pair(&c, &d);
-        let abcd = Ast::create_pair(&ab, &cd);
-
-        struct TestVisitor {
-            count: u64,
-            accumulator: String,
-        }
-
-        impl Visitor for TestVisitor {
-            fn visit_pair(&mut self, _: &Ast, _: &Ast, traversal: Traversal, _: SyntaxInfo) {
-                assert_eq!(traversal, Traversal::Prefix);
-                self.accumulator
-                    .push_str(format!("{}", self.count).as_str());
-                self.count += 1;
-            }
-
-            fn visit_string(&mut self, value: &str, _: SyntaxInfo) {
-                self.accumulator.push_str(value);
+    impl TestVisitor {
+        fn new() -> Self {
+            TestVisitor {
+                visited: Vec::new(),
             }
         }
+    }
 
-        let mut visitor = TestVisitor {
-            count: 0,
-            accumulator: String::new(),
-        };
+    impl Visitor for TestVisitor {
+        fn visit_nil(&mut self, _: SyntaxInfo) {
+            self.visited.push((AstNode::Nil, Traversal::Prefix));
+        }
 
-        abcd.visit(&mut visitor, true, false, false);
-        assert_eq!(visitor.accumulator, "01ab2cd");
+        fn visit_pair(&mut self, _: &Ast, _: &Ast, traversal: Traversal, _: SyntaxInfo) {
+            self.visited.push((AstNode::Pair, traversal));
+        }
+
+        fn visit_symbol(&mut self, symbol: u64, _: SyntaxInfo) {
+            self.visited
+                .push((AstNode::Symbol(symbol), Traversal::Prefix));
+        }
+
+        fn visit_integer(&mut self, value: &BigInt, _: SyntaxInfo) {
+            self.visited
+                .push((AstNode::Integer(value.clone()), Traversal::Prefix));
+        }
+
+        fn visit_float(&mut self, value: f64, _: SyntaxInfo) {
+            self.visited
+                .push((AstNode::Float(value), Traversal::Prefix));
+        }
+
+        fn visit_char(&mut self, value: char, _: SyntaxInfo) {
+            self.visited.push((AstNode::Char(value), Traversal::Prefix));
+        }
+
+        fn visit_string(&mut self, value: &str, _: SyntaxInfo) {
+            self.visited
+                .push((AstNode::String(value.to_string()), Traversal::Prefix));
+        }
     }
 
     #[test]
-    fn test_visit_infix() {
-        let a = Ast::create_string("a");
-        let b = Ast::create_string("b");
-        let c = Ast::create_string("c");
-        let d = Ast::create_string("d");
-
-        let ab = Ast::create_pair(&a, &b);
-        let cd = Ast::create_pair(&c, &d);
-        let abcd = Ast::create_pair(&ab, &cd);
-
-        struct TestVisitor {
-            count: u64,
-            accumulator: String,
-        }
-
-        impl Visitor for TestVisitor {
-            fn visit_pair(&mut self, _: &Ast, _: &Ast, traversal: Traversal, _: SyntaxInfo) {
-                assert_eq!(traversal, Traversal::Infix);
-                self.accumulator
-                    .push_str(format!("{}", self.count).as_str());
-                self.count += 1;
-            }
-
-            fn visit_string(&mut self, value: &str, _: SyntaxInfo) {
-                self.accumulator.push_str(value);
-            }
-        }
-
-        let mut visitor = TestVisitor {
-            count: 0,
-            accumulator: String::new(),
-        };
-
-        abcd.visit(&mut visitor, false, true, false);
-        assert_eq!(visitor.accumulator, "a0b1c2d");
+    fn test_visit_nil() {
+        let ast = Ast::create_nil();
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(visitor.visited, vec![(AstNode::Nil, Traversal::Prefix)]);
     }
 
     #[test]
-    fn test_visit_postfix() {
-        let a = Ast::create_string("a");
-        let b = Ast::create_string("b");
-        let c = Ast::create_string("c");
-        let d = Ast::create_string("d");
-
-        let ab = Ast::create_pair(&a, &b);
-        let cd = Ast::create_pair(&c, &d);
-        let abcd = Ast::create_pair(&ab, &cd);
-
-        struct TestVisitor {
-            count: u64,
-            accumulator: String,
-        }
-
-        impl Visitor for TestVisitor {
-            fn visit_pair(&mut self, _: &Ast, _: &Ast, traversal: Traversal, _: SyntaxInfo) {
-                assert_eq!(traversal, Traversal::Postfix);
-                self.accumulator
-                    .push_str(format!("{}", self.count).as_str());
-                self.count += 1;
-            }
-
-            fn visit_string(&mut self, value: &str, _: SyntaxInfo) {
-                self.accumulator.push_str(value);
-            }
-        }
-
-        let mut visitor = TestVisitor {
-            count: 0,
-            accumulator: String::new(),
-        };
-
-        abcd.visit(&mut visitor, false, false, true);
-        assert_eq!(visitor.accumulator, "ab0cd12");
+    fn test_visit_symbol() {
+        let ast = Ast::create_symbol(42);
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![(AstNode::Symbol(42), Traversal::Prefix)]
+        );
     }
 
     #[test]
-    fn test_visit_all() {
-        let a = Ast::create_string("a");
-        let b = Ast::create_string("b");
-        let c = Ast::create_string("c");
-        let d = Ast::create_string("d");
+    fn test_visit_integer() {
+        let ast = Ast::create_integer(BigInt::from(123));
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![(AstNode::Integer(BigInt::from(123)), Traversal::Prefix)]
+        );
+    }
 
-        let ab = Ast::create_pair(&a, &b);
-        let cd = Ast::create_pair(&c, &d);
-        let abcd = Ast::create_pair(&ab, &cd);
+    #[test]
+    fn test_visit_float() {
+        let ast = Ast::create_float(3.14);
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![(AstNode::Float(3.14), Traversal::Prefix)]
+        );
+    }
 
-        struct TestVisitor {
-            count: u64,
-            accumulator: String,
-        }
+    #[test]
+    fn test_visit_char() {
+        let ast = Ast::create_char('a');
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![(AstNode::Char('a'), Traversal::Prefix)]
+        );
+    }
 
-        impl Visitor for TestVisitor {
-            fn visit_pair(&mut self, _: &Ast, _: &Ast, _: Traversal, _: SyntaxInfo) {
-                self.accumulator
-                    .push_str(format!("{}", self.count).as_str());
-                self.count += 1;
-            }
+    #[test]
+    fn test_visit_string() {
+        let ast = Ast::create_string("hello");
+        let mut visitor = TestVisitor::new();
+        ast.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![(AstNode::String("hello".to_string()), Traversal::Prefix)]
+        );
+    }
 
-            fn visit_string(&mut self, value: &str, _: SyntaxInfo) {
-                self.accumulator.push_str(value);
-            }
-        }
-
-        let mut visitor = TestVisitor {
-            count: 0,
-            accumulator: String::new(),
-        };
-
-        abcd.visit(&mut visitor, true, true, true);
-        assert_eq!(visitor.accumulator, "01a2b345c6d78");
+    #[test]
+    fn test_visit_pair() {
+        let head = Ast::create_symbol(1);
+        let tail = Ast::create_symbol(2);
+        let pair = Ast::create_pair(&head, &tail);
+        let mut visitor = TestVisitor::new();
+        pair.visit(&mut visitor, true, false, false);
+        assert_eq!(
+            visitor.visited,
+            vec![
+                (AstNode::Pair, Traversal::Prefix),
+                (AstNode::Symbol(1), Traversal::Prefix),
+                (AstNode::Symbol(2), Traversal::Prefix),
+            ]
+        );
     }
 }

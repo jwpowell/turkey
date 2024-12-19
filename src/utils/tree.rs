@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+#[derive(Debug)]
 pub struct Tree<T>(Rc<TreeNode<T>>);
 
 impl<T> Clone for Tree<T> {
@@ -8,6 +9,7 @@ impl<T> Clone for Tree<T> {
     }
 }
 
+#[derive(Debug)]
 struct TreeNode<T> {
     data: T,
     children: Vec<Tree<T>>,
@@ -160,11 +162,24 @@ mod tests {
     fn test_tree_inorder_traversal() {
         let leaf1 = Tree::leaf(1);
         let leaf2 = Tree::leaf(2);
-        let node = Tree::node(3, &[leaf1.clone(), leaf2.clone()]);
+        let leaf3 = Tree::leaf(3);
+        let leaf4 = Tree::leaf(4);
+        let node5 = Tree::node(5, &[leaf1.clone(), leaf2.clone()]);
+        let node6 = Tree::node(6, &[leaf3.clone(), leaf4.clone()]);
+        let node7 = Tree::node(7, &[node5.clone(), node6.clone()]);
+
+        let node = node7;
 
         let mut visitor = TestVisitor::new();
         node.visit(&mut visitor, false, true, false);
 
-        assert_eq!(visitor.visited, vec![(2, TreeTraversal::InOrder),]);
+        assert_eq!(
+            visitor.visited,
+            vec![
+                (5, TreeTraversal::InOrder),
+                (7, TreeTraversal::InOrder),
+                (6, TreeTraversal::InOrder),
+            ]
+        );
     }
 }
