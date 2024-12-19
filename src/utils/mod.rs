@@ -1,3 +1,3 @@
 mod unique;
 
-pub use unique::{unique, Unique};
+pub use unique::unique;
