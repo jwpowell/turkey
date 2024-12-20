@@ -2,20 +2,51 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
+#[derive(Debug, Clone)]
 pub struct Graph<V, E> {
     vertices: Vec<Vertex<V, E>>,
     map: HashMap<u64, usize>,
     next_id: u64,
 }
 
-struct Vertex<V, E> {
-    data: V,
-    edges: Vec<Edge<E>>,
+#[derive(Debug, Clone)]
+pub struct Vertex<V, E> {
+    pub data: V,
+    pub edges: Vec<Edge<E>>,
 }
 
-struct Edge<E> {
-    data: E,
-    target: u64,
+impl<V, E> Vertex<V, E> {
+    pub fn data(&self) -> &V {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut V {
+        &mut self.data
+    }
+
+    pub fn edges(&self) -> &[Edge<E>] {
+        &self.edges
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Edge<E> {
+    pub data: E,
+    pub target: u64,
+}
+
+impl<E> Edge<E> {
+    pub fn data(&self) -> &E {
+        &self.data
+    }
+
+    pub fn data_mut(&mut self) -> &mut E {
+        &mut self.data
+    }
+
+    pub fn target(&self) -> u64 {
+        self.target
+    }
 }
 
 impl<V, E> Graph<V, E> {
@@ -79,6 +110,36 @@ impl<V, E> Graph<V, E> {
         self.vertices[src_index]
             .edges
             .retain(|edge| edge.target != dst);
+    }
+
+    pub fn get_vertex(&self, vertex: u64) -> Option<&Vertex<V, E>> {
+        let index = self.get_index(vertex)?;
+        Some(&self.vertices[index])
+    }
+
+    pub fn get_edge(&self, src: u64, dst: u64) -> Option<&Edge<E>> {
+        let src_index = self.get_index(src)?;
+        self.vertices[src_index]
+            .edges
+            .iter()
+            .find(|edge| edge.target == dst)
+    }
+
+    pub fn get_edges(&self, src: u64) -> Option<&[Edge<E>]> {
+        let src_index = self.get_index(src)?;
+        Some(&self.vertices[src_index].edges)
+    }
+
+    pub fn has_vertex(&self, vertex: u64) -> bool {
+        self.get_index(vertex).is_some()
+    }
+
+    pub fn has_edge(&self, src: u64, dst: u64) -> bool {
+        let src_index = self.get_index(src).expect("source vertex not found");
+        self.vertices[src_index]
+            .edges
+            .iter()
+            .any(|edge| edge.target == dst)
     }
 
     pub fn visit<Vi: Visitor<V, E>>(&self, visitor: &mut Vi) {
